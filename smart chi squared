@@ -1,0 +1,77 @@
+"""
+Created on Wed Mar 29 14:11:45 2017
+本函数是根据输入的数据，计算制定列（未指定时默认全部列）中的离散变量列两两之间的卡方检验结果，输出
+包含每行为 每对离散变量之间的卡方检验值，自由度，临界点和p值,和独立性检验结论的数据框。
+要点1:输入可以是xlsx,csv，DataFrame
+要点2:若指定的列中的类型为数值型，若在整个数据中，该变量的数不同值的个数小于或等于用户自定义的参数thred，则其也被看做分类变量。
+若该数值型过于连续（大于用于自定义的参数thred，则其被忽略，在最后输出的数据框中不包含含有该变量的卡方检验。
+默认的thred数量是5。
+要点3：本函数计算的p值是基于95%的置信度得来的。
+@author: Jia
+
+"""
+import pandas as pd
+import numpy as np
+import math
+import os
+import itertools
+import scipy.stats as stats
+def chisqr_test(filepath,cols=0,skiprows=0,thred=5): 
+    if type(filepath)==str and filepath[-5:]=='.xlsx':
+        if os.path.exists(filepath) == False:
+               fileerror="文件名不存在！请检查后重新调用函数。"
+               print(fileerror)
+               return False
+        df1 = pd.read_excel(filepath, index_col=0,skiprows=skiprows)
+    elif type(filepath)==str and filepath[-4:]=='.csv':
+        if os.path.exists(filepath) == False:
+               fileerror="文件名不存在！请检查后重新调用函数。"
+               print(fileerror)
+               return False
+        df1 = pd.read_csv(filepath, index_col=0,skiprows=skiprows)
+    elif type(filepath)==pd.core.frame.DataFrame:
+        df1=filepath
+    else:
+        print('不支持的文件扩展名或者不存在的数据框')
+        return False
+        #####将列的指标统一，数字转化为列名
+    if cols==0:
+        cols=list(df1.columns)
+    elif type(cols[0])==str and set(np.array(cols))-set(np.array(df1.dtypes.index))!=set() :
+        wrongcol=set(np.array(cols))-set(np.array(df1.dtypes.index))
+        print('错误的列',wrongcol)
+        return False
+    elif type(cols[0])==int:
+        if set(cols)-set(np.arange(len(df1.columns)))!=set():
+            wrongcolumn=set(cols)-set(np.arange(len(df1.columns)))
+            print('错误的列',wrongcolumn)
+            return False
+        else:
+            cols=list(df1.columns[cols])
+    catcol=[]###只选择列数据类型是字符或者逻辑的
+    for i in cols:
+        if df1[i].dtype=='object' or df1[i].dtype=='bool' or len(set(df1[i]))<=thred :
+            catcol.append(i)
+    colscombo=list(itertools.combinations(catcol,2)) #将选择的分类变量两两组合，形成list：colscombo
+    f=pd.DataFrame({'变量组合':[],'卡方统计量':[],'P值':[],'临界值':[],'自由度':[],'检验结论':[]})
+    for j in colscombo:
+        pair=list(j)
+        A=df1[pair[0]]
+        B=df1[pair[1]]
+        df=(len(set(A))-1)*(len(set(B))-1) ##计算自由度
+        ct=pd.crosstab(A,B,margins=True) #分布频率表，带加总的。
+        observed=np.array(ct)[:-1,:-1] #观测值的分布表
+        expected =  np.outer(ct["All"][:-1],
+                     ct.ix[len(ct)-1][:-1]) / 1000 #期望值的分布表（如果独立分布，那么理论上的频率）
+        chi_squared_stat = (((observed-expected)**2)/expected).sum().sum() #按照公式，计算卡方统计量
+        crit = stats.chi2.ppf(q = 0.95, # 找到95%置信度的临界值
+                      df = df)   # *
+        p_value = 1 - stats.chi2.cdf(x=chi_squared_stat,df=df) #计算p值
+        if p_value<0.05:
+            inde='相关'
+        else:
+            inde='独立'
+        f=f.append({'变量组合':pair,'卡方统计量':chi_squared_stat,'P值':p_value,'临界值':crit,'自由度':round(df),'检验结论':inde},ignore_index=True)
+        #空的数据框下添加一行，包含本次循环这一组的输出统计量
+    f['自由度']=f['自由度'].astype(int)
+    return(f)
