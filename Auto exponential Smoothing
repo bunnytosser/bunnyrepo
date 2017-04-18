@@ -1,0 +1,256 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Apr 14 10:24:42 2017
+%%%%%%%%%%%%%%%%%%%%%本模块共5个函数%%%%%%%%%%%%%%%%%
+I.最终的函数是Holt_Winters,其中输入分别为：
+1.x,时间序列
+2.fc：预测期长度
+3.method：预测方法，这里有linear，additive和multiplicative三种指数平滑的方式可以选择。如果method
+设定为None或者不输入，则函数自定计算三种模型的RMSE，并选取能得到最小RMSE的模型，进行计算估计和预测
+4.m：三重指数平滑法的季节周期长度，可选，若方法为additive和multiplicative，或者默认方法,则必须输入m
+5.alpha，beta和gamma是指数平滑模型的参数，默认不填写，则在linear，additive和multiplicative这三个子函数中
+采用BFGS的最优化方法估计最优的参数。也可以手动指定这三个参数。其中gamma对于linear的method不用填。
+
+函数输出：
+1.采用的方法名称，或者自动选取的最优方法名称
+2.预测期的预测值
+3.alpa，beta，gamma的参数取值
+4.rmse的大小
+5.序列实际值，拟合值和残差的折线图。
+%%%%%%%%%%%%%%%%%%%%%%%%%5
+II.linear，additive和multiplicative这三个函数
+其中输入分别为：
+1.x,时间序列
+2.fc：预测期长度
+3.m：在additive和multiplicative函数中 季节周期长度，必须输入
+4.alpha，beta和gamma是指数平滑模型的参数，默认不填写，则在linear，additive和multiplicative这三个子函数中
+采用BFGS的最优化方法估计最优的参数。也可以手动指定这三个参数。其中gamma对于linear的函数不用填。
+
+函数输出：
+
+1.预测期的预测值
+2.alpa，beta，gamma的参数取值
+3.rmse的大小
+4.序列实际值，拟合值和残差的折线图。
+
+III.RMSE(params, *args)函数
+功能：根据不同类型的模型，分别计算RMSE函数，返回值为RMSE表达式。
+params为需要估计的参数，也就是目标函数中的变量，在后面引用RMSE函数时候 就是alpha beta gamma
+*args包含多个参数，需要后续传递。第一个是Y，也就是目标序列，第二个参数是type，根据传递进来type类型
+分别计算linear，additive和multiplicative类型模型的RMSE表达式。
+
+@author: Jia
+
+"""
+from __future__ import division
+from sys import exit
+from math import sqrt
+from numpy import array
+from scipy.optimize import fmin_l_bfgs_b
+
+def RMSE(params, *args):
+#根据不同类型的模型，分别计算RMSE函数，返回值为RMSE函数
+
+	Y = args[0]
+	type = args[1]#分别是第一和第二个参数，对应其他函数最优化RMSE时候，用到BFGS函数的args里面的参数
+	rmse = 0
+	if type == 'linear':
+		alpha, beta = params
+		a = [Y[0]]
+		b = [Y[1] - Y[0]]
+		y = [a[0] + b[0]]
+		for i in range(len(Y)):
+			a.append(alpha * Y[i] + (1 - alpha) * (a[i] + b[i]))
+			b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+			y.append(a[i + 1] + b[i + 1])
+	else:
+
+		alpha, beta, gamma = params
+		m = args[2]		
+		a = [sum(Y[0:m]) / float(m)]
+		b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+
+		if type == 'additive':
+
+			s = [Y[i] - a[0] for i in range(m)]
+			y = [a[0] + b[0] + s[0]]
+
+			for i in range(len(Y)):
+
+				a.append(alpha * (Y[i] - s[i]) + (1 - alpha) * (a[i] + b[i]))
+				b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+				s.append(gamma * (Y[i] - a[i] - b[i]) + (1 - gamma) * s[i])
+				y.append(a[i + 1] + b[i + 1] + s[i + 1])
+
+		elif type == 'multiplicative':
+
+			s = [Y[i] / a[0] for i in range(m)]
+			y = [(a[0] + b[0]) * s[0]]
+
+			for i in range(len(Y)):
+
+				a.append(alpha * (Y[i] / s[i]) + (1 - alpha) * (a[i] + b[i]))
+				b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+				s.append(gamma * (Y[i] / (a[i] + b[i])) + (1 - gamma) * s[i])
+				y.append((a[i + 1] + b[i + 1]) * s[i + 1])
+
+		else:
+
+			exit('Type must be either linear, additive or multiplicative')
+		
+	rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y, y[:-1])]) / len(Y))
+
+	return rmse
+
+def linear(x, fc, alpha = None, beta = None):
+#二重指数平滑模型。
+
+	YA = x[:] #YA是实际的序列
+	Y = YA #Y为时间序列预测的序列，设定其初始值等于实际序列
+
+	if (alpha == None or beta == None):
+
+		initial_values = array([0.3, 0.1])
+		boundaries = [(0, 1), (0, 1)]
+		type = 'linear' #设定参数初始值和参数边界， 并且在RMSE函数计算中，输入类型设定为‘linear’
+
+		parameters = fmin_l_bfgs_b(RMSE, x0 = initial_values, args = (Y, type), bounds = boundaries, approx_grad = True)
+		alpha, beta = parameters[0]
+#使用BFGS—B方法进行最优化。其本质是一种拟牛顿的方法。参数分别为：
+#func : 需要在最小化的目标函数
+#x0 : 对初始值的猜测
+#fprime : callable fprime(x,*args)
+#    The gradient of func. If None, then func returns the function value and the gradient (f, g = func(x, *args)), unless approx_grad is True in which case func returns only f.
+#args : 传递给函数和fprime的argument
+#approx_grad : bool 是否从数值上估计梯度
+#bounds : 参数边界
+
+	a = [Y[0]]
+	b = [Y[1] - Y[0]]
+	y = [a[0] + b[0]]
+	rmse = 0
+
+	for i in range(len(Y) + fc):
+
+		if i == len(Y):
+			Y=Y.append(pd.Series((a[-1] + b[-1]),index=[Y.index[-1]+1]))
+
+		a.append(alpha * Y[i] + (1 - alpha) * (a[i] + b[i]))
+		b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+		y.append(a[i + 1] + b[i + 1])
+
+	rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+	Y=pd.Series(y[:-1],index=[Y.index])
+	res=YA-Y
+	fra1=pd.concat([Y,YA,res],axis=1)
+	fra1.columns=['linear fitted','actual','residual']
+	fra1.plot()
+	return Y[-fc:], 'alpha:',alpha, 'beta:',beta, 'rmse:',rmse
+
+
+
+ 
+def additive(x, m, fc, alpha = None, beta = None, gamma = None):#可加性三重指数平滑法
+ 
+	YA = x[:]
+	Y = YA #Y为时间序列
+ 
+	if (alpha == None or beta == None or gamma == None): 
+     #若未指定参数，则自动最优化选择
+  
+		initial_values = array([0.3, 0.1, 0.1]) #设定初始值
+		boundaries = [(0, 1), (0, 1), (0, 1)] #设定参数的范围0-1
+		type = 'additive' #在RMSE的求解方程中，设定使用的是additive的方法。
+  
+		parameters = fmin_l_bfgs_b(RMSE, x0 = initial_values, args = (Y, type, m), bounds = boundaries, approx_grad = True)
+		alpha, beta, gamma = parameters[0]
+ 
+	a = [sum(Y[0:m]) / float(m)]#初始值的设定
+	b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+	s = [Y[i] - a[0] for i in range(m)]
+	y = [a[0] + b[0] + s[0]]
+	rmse = 0
+	for i in range(len(Y) + fc):
+		if i >= len(Y):
+			Y=Y.append(pd.Series((a[-1] + b[-1]+ s[-m]),index=[Y.index[-1]+1]))
+		a.append(alpha * (Y[i] - s[i]) + (1 - alpha) * (a[i] + b[i]))
+		b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+		s.append(gamma * (Y[i] - a[i] - b[i]) + (1 - gamma) * s[i])
+		y.append(a[i + 1] + b[i + 1] + s[i + 1])
+ 
+	rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+	Y=pd.Series(y[:-1],index=[Y.index])
+	res=YA-Y
+	additive.fra1=pd.concat([Y,YA,res],axis=1)
+	additive.fra1.columns=['additive fitted','actual','residual']
+	fra1=pd.concat([Y,YA,res],axis=1)
+	fra1.columns=['additive fitted','actual','residual']
+	fra1.plot()
+	return Y[-fc:], 'alpha:',alpha, 'beta:',beta, 'gamma:',gamma, 'rmse:',rmse
+
+def multiplicative(x, m, fc, alpha = None, beta = None, gamma = None):#可乘季节趋势三重指数平滑法
+ 
+	YA = x[:]
+	Y = YA #Y为时间序列
+ 
+	if (alpha == None or beta == None or gamma == None):
+  
+		initial_values = array([0.0, 1.0, 0.0])
+		boundaries = [(0, 1), (0, 1), (0, 1)]
+		type = 'multiplicative'
+  
+		parameters = fmin_l_bfgs_b(RMSE, x0 = initial_values, args = (Y, type, m), bounds = boundaries, approx_grad = True)
+		alpha, beta, gamma = parameters[0]
+ 
+	a = [sum(Y[0:m]) / float(m)]
+	b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+	s = [Y[i] / a[0] for i in range(m)]
+	y = [(a[0] + b[0]) * s[0]]
+	rmse = 0
+	for i in range(len(Y) + fc):
+		if i >= len(Y):
+			Y=Y.append(pd.Series((a[-1] + b[-1]) * s[-m],index=[Y.index[-1]+1]))
+  
+		a.append(alpha * (Y[i] / s[i]) + (1 - alpha) * (a[i] + b[i]))
+		b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+		s.append(gamma * (Y[i] / (a[i] + b[i])) + (1 - gamma) * s[i])
+		y.append((a[i + 1] + b[i + 1]) * s[i + 1])
+	rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+	Y=pd.Series(y[:-1],index=[Y.index])
+	res=YA-Y
+	fra1=pd.concat([Y,YA,res],axis=1)
+	fra1.columns=['multiplicative fitted','actual','residual']
+	fra1.plot()
+	return Y[-fc:], 'alpha:',alpha, 'beta:',beta, 'gamma:',gamma, 'rmse:',rmse
+
+
+
+""""
+模型整合
+"""
+def Holt_Winters(x,fc,method=None,m=None,alpha=None, beta=None,gamma=None,outpath=False):
+	if method==None:
+		lin=linear(x,fc,alpha, beta)[-1]
+		add=additive(x, m, fc, alpha, beta, gamma)[-1]
+		mul=multiplicative(x, m, fc, alpha, beta, gamma)[-1]
+		rmselist=[('linear',lin),('additive',add),('multiplicative',mul)]
+		minumum=min(rmselist,key=lambda r:r[1])
+		method=minumum[0]
+	if method=='linear':
+		model=linear(x,fc,alpha, beta)
+	elif method=='additive':
+		model=additive(x, m, fc, alpha, beta, gamma)
+	elif method=='multiplicative':
+		model=multiplicative(x, m, fc, alpha, beta, gamma)       
+	else:
+		print('invalid method,please ensure the correct method is specified')
+		return False
+	if outpath == False:
+		pass
+	elif type(outpath) == str and outpath[-4:] == '.csv':
+		f.to_csv(outpath)
+	else:
+		outerror = "wrong directory, csv file supported only" #输出路径错误
+		print(outerror)
+		return False  
+	return('method',method,model)
