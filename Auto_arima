@@ -1,0 +1,105 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 20 16:47:07 2017
+函数说明：
+函数输入：dta：待分析的时间序列。需要是pandas的Series类型。
+step：预测期的长度，数字型。
+p,d,q：为ARIMA模型阶数。默认是None，在此情况下，首先，模型自动对序列的平稳性进行ADF检验，若不平
+稳，则自动增加查分阶数直到平稳为止（最高允许到5阶差分），然后函数根据不同阶数ARIMA模型的BIC标准，
+选择得到BIC最小的那个模型的相应p和q参数。
+
+模型的返回：
+1.对系统选取或者用户自定义的ARIMA(p,d,q)模型所得到的序列的残差进行Ljung-Box检验的结论，提示
+该模型是否不存在滞后相关。
+2. ARIMA模型的阶数
+3. 数据框，每一列分别展示对应预测期的预测值，p值，预测最大值和预测最小值
+4. 拟合图。包含了实际序列图（绿色），拟合+预测的序列图（蓝色），和预测期内95%的置信区间。
+
+
+@author: USUARIO
+"""
+from statsmodels.tsa.arima_model import ARIMA
+from statsmodels.tsa.arima_model import ARIMAResults
+from math import sqrt
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import matplotlib.pylab as plt
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.api import qqplot
+from statsmodels.stats import diagnostic
+import warnings
+def auto_arima(dta,step,p=None,d=None,q=None): 
+#函数输入：dta：待分析的时间序列。需要是pandas的Series类型。
+#step：预测期的长度，数字型。
+#p,d,q：为ARIMA模型阶数。默认是None.
+	if d==None:
+		if adfuller(dta,regression='ct')[1]>=0.05: #用增广Dickey-Fuller检验，检验序列是否平稳，若不平稳，则取d阶差分，直到其平稳为止。
+			for i in np.arange(10):
+				diff=dta.diff(i+1)
+				diffseries=diff[i+1:]
+				adt=adfuller(diffseries,regression='ct')[1]
+				if adt<=0.05:
+					d=i+1
+					break
+				elif adt>0.05 and i+1==5: #若取了5阶差分扔不平稳，考虑到后面会损失太多的观测值，那么不取差分，直接用原数据。
+					d=0
+		else:#若本来就平稳，则不取差分，ARIMA模型中的d=0.
+			d=0
+	dta=dta.astype('float64') #如果时间序列数据类型是int，后面可能会出问题，先进行转化为float64格式
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore")#忽略警告，否则可能弹出大量关于ML最优化收敛的警告信息。
+		if type(dta.index)==pd.tseries.period.PeriodIndex: #如果时间序列的index是period，则转化为timestamp，方便后面预测。
+			ind=dta.index
+			dta.index=ind.to_timestamp()
+		if p==None or q==None:#若用户没有自定义ARMA阶数，则根据BIC准则自动判断
+			maxp=int(len(dta)/10)  #设置p和q的最大阶数，对于小样本，太大的阶数损失太多观测值，没有意义。
+			maxq=int(len(dta)/10)
+			biclist = [] #根据BIC标准，选择理想的阶数。
+			for p in range(maxp+1):
+				tmp = []
+				for q in range(maxq+1): #存在部分报错，所以用try来跳过报错。
+					try:
+						tmp.append(ARIMA(dta, (p,d,q)).fit().bic) 
+					except:
+						tmp.append(None)
+				biclist.append(tmp)
+			biclist = pd.DataFrame(biclist)#将biclist转化为相应的数据框
+			#先用stack展平，然后用idxmin找出最小值位置。
+			try: 
+				p,q = biclist.stack().idxmin() 
+			except: 
+				return('无法计算模型BIC，请手动输入阶数') #考虑到有可能biclist是空数据框的情况。（很罕见）
+
+		model=ARIMA(dta, (p,d,q)).fit()#利用前面选择的阶数的ARIMA，建立模型
+		resid=model.resid #计算模型残差
+	#对残差进行LJB检验，原假设和备选假设分别为:
+		# H0: 数据独立分布
+		# Ha: 数据不独立，存在序列相关性
+		if diagnostic.acorr_ljungbox(resid,lags=1,boxpierce=False)[1]>0.05:
+			LBJ='LB检验通过，残差无滞后相关，ARIMA模型合适' #允许最后函数会返回LB检验的结论。
+		else:
+			LBJ='LB检验未通过，残差存在滞后相关，以下ARIMA模型未必合适，仅供参考'
+
+		if type(dta.index)==pd.tseries.period.PeriodIndex: #如果时间序列的index是period，则转化为timestamp，方便后面预测。
+			ind=dta.index
+			dta.index=ind.to_timestamp()
+		fore=model.forecast(step)[0] #arima预测结果
+		pvalue=model.forecast(step)[1] #arima预测的p值
+		foremin=model.forecast(step)[2][:,0] #根据95%置信区间，预测的最大值和最小值
+		foremax=model.forecast(step)[2][:,1]
+		steps=np.arange(step)+1 
+		f=pd.DataFrame({'预测时长':steps,'预测':fore,'p值':pvalue,'预测最小值':foremin,'预测最大值':foremax})
+		model.plot_predict(1,len(dta)+step) #作出时间序列预测图
+		return(LBJ,'根据BIC自动选取的ARIMA阶数：','p=',p,'d=',d,'q=',q,f)
+
+###测试数列
+#dta=[10930,10318,10595,10972,7706,6756,9092,10551,9722,10913,11151,8186,6422,
+#6337,11649,11652,10310,12043,7937,6476,9662,9570,9981,9331,9449,6773,6304,9355,
+#10477,10148,10395,11261,8713,7299,10424,10795,11069,11602,11427,9095,7707,10767,
+#12136,12812,12006,12528,10329,7818,11719,11683,12603,11495,13670,11337,10232,
+#13261,13230,15535,16837,19598,14823,11622,19391,18177,19994,14723,15694,13248,
+#9543,12872,13101,15053,12619,13749,10228,9725,14729,12518,14564,15085,14722,
+#11999,9390,13481,14795,15845,15271,14686,11054,10395]
+#dta=pd.Series(dta)
+#dta.index = pd.Index(sm.tsa.datetools.dates_from_range('2001','2090'))
