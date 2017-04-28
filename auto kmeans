@@ -1,0 +1,94 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 27 18:00:12 2017
+
+@author: Jia
+"""
+from sklearn.datasets import make_blobs
+import numpy as np
+from matplotlib import cm
+from sklearn.metrics import silhouette_samples
+import pandas as pd
+from sklearn.cluster import KMeans
+import os
+import math
+def k_means(filepath,cols='null',k='null'):
+	if type(filepath)==str and filepath[-5:]=='.xlsx':
+		if os.path.exists(filepath) == False:
+			fileerror="文件名不存在！请检查后重新调用函数。"
+			print(fileerror)
+			return False
+		df1 = pd.read_excel(filepath, index_col=0)
+	elif type(filepath)==str and filepath[-4:]=='.csv':
+		if os.path.exists(filepath) == False:
+			fileerror="文件名不存在！请检查后重新调用函数。"
+			print(fileerror)
+			return False
+		df1 = pd.read_csv(filepath, index_col=0)
+	elif type(filepath)==pd.core.frame.DataFrame:
+		df1=filepath
+	else:
+		print('不支持的文件扩展名或者不存在的数据框')
+		return False
+		#####将列的指标统一，数字转化为列名
+	catcol=[]###只选择列数据类型是字符或者逻辑的
+	if cols=='null':
+		cols=list(df1.columns)
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)#将选择的分类变量两两组合，形成list：colscombo
+	else:
+		if type(cols[0])==str and set(np.array(cols))-set(np.array(df1.dtypes.index))!=set() :
+			wrongcol=set(np.array(cols))-set(np.array(df1.dtypes.index))
+			print('错误的列',wrongcol)
+			return False
+		elif type(cols[0])==int:
+			if set(cols)-set(np.arange(len(df1.columns)))!=set():
+				wrongcolumn=set(cols)-set(np.arange(len(df1.columns)))
+				print('错误的列',wrongcolumn)
+				return False
+			else:
+				cols=list(df1.columns[cols])
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)#将选择的分类变量两两组合，形成list：colscombo
+	x=df1[catcol]
+	avgsil=[]
+	if k='null':
+		for j in range(2,10):
+		#	plt.show()
+		#	y_ax_lower,y_ax_upper=0,0
+		#	yticks=[]
+			km=KMeans(n_clusters=j,init='k-means++',n_init=10,max_iter=300,tol=1e-04,random_state=0)
+			y_km=km.fit_predict(x)
+	#        cluster_labels=np.unique(y_km)
+			silhouette_vals=silhouette_samples(x,y_km,metric='euclidean')
+		#	for i,c in enumerate(cluster_labels):
+		#		c_sil=silhouette_vals[y_km==c]
+		#		c_sil.sort()
+		#		y_ax_upper +=len(c_sil)
+		#		color=cm.jet(i/n_clusters)
+		#		plt.barh(range(y_ax_lower,y_ax_upper),
+		#				 c_sil,
+		#				 height=1.0,
+		#				 edgecolor='none',
+		#				 color=color)
+		#		yticks.append((y_ax_lower+y_ax_upper)/2)
+		#		y_ax_lower +=len(c_sil)
+			silouette_avg=np.mean(silhouette_vals)
+		#	plt.axvline(silouette_avg,color='red',linestyle='--')
+		#	plt.yticks(yticks,cluster_labels+1)
+		#	plt.ylabel('Cluster')
+		#	plt.xlabel('Silouette coefficient')
+			avgsil.append([j,silouette_avg])
+		avgsil=np.abs(avgsil)
+		maxsil=max(avgsil,key=lambda r:r[1])
+		k=maxsil[0]
+		k=int(k)   
+	optimal_kmeans=KMeans(n_clusters=k,init='k-means++',n_init=10,max_iter=300,tol=1e-04,random_state=0)
+	y_km=optimal_kmeans.fit_predict(x)
+	print('Distortion:%.2f'%optimal_kmeans.inertia_)
+	centers=optimal_kmeans.cluster_centers_
+	dfcenters=pd.DataFrame(centers,columns=x.columns)
+#    df['cluster']=y_km
+	return(dfcenters)
