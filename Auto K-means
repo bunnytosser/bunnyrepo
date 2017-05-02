@@ -1,0 +1,138 @@
+from scipy.spatial import distance_matrix
+from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.datasets import make_blobs
+import numpy as np
+from matplotlib import cm
+from sklearn.metrics import silhouette_samples
+import pandas as pd
+from sklearn.cluster import KMeans
+import os
+import math
+
+#df1 = pd.read_excel(r'C:\Users\USUARIO\Desktop\work\pythonclustering.xlsx')
+#catcol=[]###只选择列数据类型是字符或者逻辑的
+#cols=list(df1.columns)
+#for i in cols:
+#	if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+#		catcol.append(i)#将选择的分类变量两两组合，形成list：colscombo
+#x=df1[catcol]
+#x=x.dropna()
+def kMedoids(filepath,cols='null', k='null',top=5):
+	tmax=100
+	if type(filepath)==str and filepath[-5:]=='.xlsx':
+		if os.path.exists(filepath) == False:
+			return("文件名不存在！请检查后重新调用函数。")
+		df1 = pd.read_excel(filepath, index_col=0)
+	elif type(filepath)==str and filepath[-4:]=='.csv':
+		if os.path.exists(filepath) == False:
+			return("文件名不存在！请检查后重新调用函数。")
+		df1 = pd.read_csv(filepath, index_col=0)
+	elif type(filepath)==pd.core.frame.DataFrame:
+		df1=filepath
+	else:
+		print('不支持的文件扩展名或者不存在的数据框')
+		return False
+		#####将列的指标统一，数字转化为列名
+	catcol=[]###只选择列数据类型是字符或者逻辑的
+	if cols=='null':
+		cols=list(df1.columns)
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)#将选择的分类变量两两组合，形成list：colscombo
+	else:
+		if type(cols[0])==str and set(np.array(cols))-set(np.array(df1.dtypes.index))!=set() :
+			wrongcol=set(np.array(cols))-set(np.array(df1.dtypes.index))
+			return('错误的列',wrongcol)
+		elif type(cols[0])==int:
+			if set(cols)-set(np.arange(len(df1.columns)))!=set():
+				wrongcolumn=set(cols)-set(np.arange(len(df1.columns)))
+				return('错误的列',wrongcolumn)
+			else:
+				cols=list(df1.columns[cols])
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)#将选择的分类变量两两组合，形成list：colscombo
+	x=df1[catcol]
+	x=x.take(np.random.permutation(len(x))[:5000]) #只选取5000的样本，因为太大影响速度并可能无足够内存计算欧几里得距离矩阵
+	avgsil=[]
+	avgsil=[]
+	D=euclidean_distances(x,x)
+	m, n = D.shape
+	avgsil=[]
+	if k=='null':
+		for ks in range(2,8):
+			M = np.sort(np.random.choice(n, ks))
+			Mnew = np.copy(M)
+			C = {}
+			print(M)
+			for s in range(tmax):
+				# determine clusters, i.e. arrays of data indices
+				J = np.argmin(D[:,M], axis=1) #D[:,M]距离矩阵中随机选取几列。每行中选取元素值最小的那一列。
+				for kappa in range(ks): #对每一类分别：
+					C[kappa] = np.where(J==kappa)[0] #
+					# update cluster medoids
+				for kappa in range(ks):
+					J = np.mean(D[np.ix_(C[kappa],C[kappa])],axis=1)
+					j = np.argmin(J)
+					Mnew[kappa] = C[kappa][j]
+				np.sort(Mnew)
+				# check for convergence
+				if np.array_equal(M, Mnew):
+					break
+				M = np.copy(Mnew)
+			else:
+			# final update of cluster memberships
+				J = np.argmin(D[:,M], axis=1)
+				for kappa in range(s):
+					C[kappa] = np.where(J==kappa)[0]
+			y_km=[None]*len(x)
+			for kappa in range(ks): #把组赋值添加上。
+				for i in C[kappa]:
+					y_km[i]=kappa
+#			print(y_km)
+			silhouette_vals=silhouette_samples(x,y_km,metric='euclidean')
+			silouette_avg=np.mean(silhouette_vals)
+#			print(silouette_avg)
+			avgsil.append([ks,silouette_avg])
+			print('avgsil',avgsil)
+		maxsil=max(avgsil,key=lambda r:r[1])
+		k=maxsil[0]
+		k=int(k)   
+	m, n = D.shape
+	M = np.sort(np.random.choice(n, k))
+	Mnew = np.copy(M)
+
+	C = {}
+	for t in range(tmax):
+		# determine clusters, i.e. arrays of data indices
+		J = np.argmin(D[:,M], axis=1) #D[:,M]距离矩阵中随机选取几列。每行中选取元素值最小的那一列。
+		for kappa in range(k): #对每一类分别：
+			C[kappa] = np.where(J==kappa)[0] #
+			# update cluster medoids
+		for kappa in range(k):
+			J = np.mean(D[np.ix_(C[kappa],C[kappa])],axis=1)
+			j = np.argmin(J)
+			Mnew[kappa] = C[kappa][j]
+		np.sort(Mnew)
+		# check for convergence
+		if np.array_equal(M, Mnew):
+			break
+		M = np.copy(Mnew)
+	else:
+	# final update of cluster memberships
+		J = np.argmin(D[:,M], axis=1)
+		for kappa in range(k):
+			C[kappa] = np.where(J==kappa)[0]
+	y_km=[None]*len(x)
+	for kappa in range(k): #把组赋值添加上。
+		for i in C[kappa]:
+			y_km[i]=kappa
+	centers=[]
+	for i in M:
+		centers.append(x.iloc[i,:])
+	centers=pd.DataFrame(centers)
+	centers.index=np.arange(len(M))
+	dfcenters=pd.DataFrame(centers,columns=x.columns)
+	x['group']=y_km
+	return (centers,'k=%s.'%k,x['group'].head(top))
+#kMed(r'C:\Users\USUARIO\Desktop\work\pythonclustering.xlsx')
