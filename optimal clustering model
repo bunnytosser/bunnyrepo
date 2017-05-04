@@ -1,0 +1,246 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed May  3 10:20:01 2017
+
+@author: USUARIO
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Tue May  2 15:41:00 2017
+
+@author: 朱佳 Jia
+"""
+
+from scipy.spatial import distance_matrix
+from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.datasets import make_blobs
+import numpy as np
+from matplotlib import cm
+from sklearn.metrics import silhouette_samples
+import pandas as pd
+from scipy.cluster.vq import kmeans,vq
+import os
+import math
+import matplotlib.pyplot as plt
+from pandas import Series, DataFrame
+from sklearn.cluster import KMeans
+
+def nullprocessing(data,emethod='删除'):
+	series=pd.DataFrame()
+	if type(emethod)==str:
+		if emethod=='删除':
+			series=data.dropna()
+		else:
+			print('空值填充错误，请输入指定的数字或字符。')
+			return False
+	elif type(emethod)==float or type(emethod)==int:
+		series=data.fillna(emethod)
+	return series
+
+
+
+
+# python3 已经完全支持中文，不需要进行编码的转换，
+# 但有两点需要注意：一是程序的编码，二是文件的编码，必须统一。
+# 在本例中csv格式的内容需要改为uft8的编码格式，才能正常读取。
+
+
+def outlier_process(data):
+	plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常的显示中文标签
+	plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
+
+	cat_var = []  #  分类变量列表
+	con_var = []  #  连续变量列表
+	data_process = data.copy()  # 拷贝一份数据进行处理, 修改不会影响到原来的data
+	omethod='box_plot'
+	if omethod == 'box_plot':
+
+		for col in con_var:
+			QU = data_process[col].quantile(0.75)   # 上四分位数
+			QL = data_process[col].quantile(0.15)  # 下四分位数
+			Upper_limit = QU + 1.5 * (QU - QL)  # 上边界
+			Lower_limit = QL - 1.5 * (QU - QL)  # 下边界
+
+			# 使用下面的写法，可以解决SettingWithCopyWarning的问题
+			data_process.loc[data_process[col] > Upper_limit, col] = Upper_limit
+			data_process.loc[data_process[col] < Lower_limit, col] = Lower_limit
+	else:
+		pass
+	return data_process
+
+#def normalization(df1,method='zscore'):
+#	for value in catcol:
+#		if method=='zscore':
+#			df1.ix[:,value]=(df1.ix[:,value]-np.average(df1.ix[:,value]))/np.std(df1.ix[:,value])
+#		elif method=='maxmin':
+#			df1.ix[:,value]=(df1.ix[:,value]-np.min(df1.ix[:,value]))/np.ptp(df1.ix[:,value])
+#		elif method=='sigmoid':
+#			df1.ix[:,value]=1.0 / (1 + np.exp(df1.ix[:,value]))
+#		else:
+#			return '不支持的标准化方法'
+#	return df1
+#	##test:normalization('C:\\Users\\USUARIO\\Desktop\\work\\timeseries.xlsx',cols=[2,4], skiprows=1,method='sigmoid')
+
+
+def clustering(filepath,method='null',cols='null', k='null',emethod='删除',nmethod='zscore',samplesize=5000):
+	tmax=100
+	if type(filepath)==str and filepath[-5:]=='.xlsx':
+		if os.path.exists(filepath) == False:
+			return("文件名不存在！请检查后重新调用函数。")
+		df1 = pd.read_excel(filepath, index_col=0)
+	elif type(filepath)==str and filepath[-4:]=='.csv':
+		if os.path.exists(filepath) == False:
+			return("文件名不存在！请检查后重新调用函数。")
+		df1 = pd.read_csv(filepath, index_col=0)
+	elif type(filepath)==pd.core.frame.DataFrame:
+		df1=filepath
+	else:
+		print('不支持的文件扩展名或者不存在的数据框')
+		return False
+		#####将列的指标统一，数字转化为列名
+	catcol=[]###只选择列数据类型是字符或者逻辑的
+	if cols=='null':
+		cols=list(df1.columns)
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)
+	else:
+		if type(cols[0])==str and set(np.array(cols))-set(np.array(df1.dtypes.index))!=set() :
+			wrongcol=set(np.array(cols))-set(np.array(df1.dtypes.index))
+			return('错误的列',wrongcol)
+		elif type(cols[0])==int:
+			if set(cols)-set(np.arange(len(df1.columns)))!=set():
+				wrongcolumn=set(cols)-set(np.arange(len(df1.columns)))
+				return('错误的列',wrongcolumn)
+			else:
+				cols=list(df1.columns[cols])
+		for i in cols:
+			if (df1[i].dtype!='object' and df1[i].dtype!='bool'):
+				catcol.append(i)
+	dfo=df1[catcol]
+	df=nullprocessing(dfo,emethod)#空值处理
+	df1=outlier_process(df)#异常值处理
+	for value in catcol:
+		if nmethod=='zscore':
+			df1.ix[:,value]=(df1.ix[:,value]-np.average(df1.ix[:,value]))/np.std(df1.ix[:,value])
+		elif nmethod=='maxmin':
+			df1.ix[:,value]=(df1.ix[:,value]-np.min(df1.ix[:,value]))/np.ptp(df1.ix[:,value])
+		elif nmethod=='sigmoid':
+			df1.ix[:,value]=1.0 / (1 + np.exp(df1.ix[:,value]))
+		else:
+			return '不支持的标准化方法'
+	df=df1
+	x=df.take(np.random.permutation(len(df))[:samplesize]) #只选取6000的样本，因为太大影响速度并可能无足够内存计算欧几里得距离矩阵
+	D=euclidean_distances(x,x)
+	m, n = D.shape
+	avgsil=[]
+	for ks in range(2,8):
+		M = np.sort(np.random.choice(n, ks))
+		Mnew = np.copy(M)
+		C = {}
+#				print(M)
+		for s in range(tmax):
+			# determine clusters, i.e. arrays of data indices
+			J = np.argmin(D[:,M], axis=1) #D[:,M]距离矩阵中随机选取几列。每行中选取元素值最小的那一列。
+			for kappa in range(ks): #对每一类分别：
+				C[kappa] = np.where(J==kappa)[0] #
+				# update cluster medoids
+			for kappa in range(ks):
+				J = np.mean(D[np.ix_(C[kappa],C[kappa])],axis=1)
+				j = np.argmin(J)
+				Mnew[kappa] = C[kappa][j]
+			np.sort(Mnew)
+			# check for convergence
+			if np.array_equal(M, Mnew):
+				break
+			M = np.copy(Mnew)
+		else:
+		# final update of cluster memberships
+			J = np.argmin(D[:,M], axis=1)
+			for kappa in range(s):
+				C[kappa] = np.where(J==kappa)[0]
+		y_km=[None]*len(x)
+		for kappa in range(ks): #把组赋值添加上。
+			for i in C[kappa]:
+				y_km[i]=kappa
+#			print(y_km)
+		silhouette_vals=silhouette_samples(x,y_km,metric='euclidean')
+		silouette_avg=np.mean(silhouette_vals)
+	#			print(silouette_avg)
+		avgsil.append([ks,silouette_avg])
+#				print('avgsil',avgsil)
+	maxsil=max(avgsil,key=lambda r:r[1])
+#	print(avgsil)
+	kd=int(maxsil[0])#K for kkmedoids
+	maxsilmedoids=maxsil[1]	 #corresponding silhouette
+	avgsil=[]
+	for j in range(2,10):
+		km=KMeans(n_clusters=j,init='k-means++',n_init=10,max_iter=300,tol=1e-04,random_state=0)
+		y_kmn=km.fit_predict(x)
+		silhouette_vals1=silhouette_samples(x,y_kmn,metric='euclidean')
+		silouette_avg1=np.mean(silhouette_vals1)
+		avgsil.append([j,silouette_avg])
+	avgsil=np.abs(avgsil)
+	maxsil=max(avgsil,key=lambda r:r[1])
+	kn=int(maxsil[0])#k for k-means
+	maxsilmean=maxsil[1] #corresponding silhuette
+	if method=='null':
+		if 	maxsilmedoids>maxsilmean:
+			method='k-medoids'
+		else:
+			method='k-means'
+	if k=='null':
+		if method=='k-medoids':
+			k=kd
+		else:
+			k=kn
+	if method=='k-means': #kmeans method
+		optimal_kmeans=KMeans(n_clusters=k,init='k-means++',n_init=10,max_iter=300,tol=1e-04,random_state=0)
+		y_km=optimal_kmeans.fit_predict(x)
+		centers=optimal_kmeans.cluster_centers_
+		dfcenters=pd.DataFrame(centers,columns=x.columns)
+		x['group']=y_km
+	elif method=='k-medoids': #k-medoids method
+		m, n = D.shape
+		M = np.sort(np.random.choice(n, k))
+		Mnew = np.copy(M)
+		C = {}
+		for t in range(tmax):
+			# determine clusters, i.e. arrays of data indices
+			J = np.argmin(D[:,M], axis=1) #D[:,M]距离矩阵中随机选取几列。每行中选取元素值最小的那一列。
+			for kappa in range(k): #对每一类分别：
+				C[kappa] = np.where(J==kappa)[0] #
+				# update cluster medoids
+			for kappa in range(k):
+				J = np.mean(D[np.ix_(C[kappa],C[kappa])],axis=1)
+				j = np.argmin(J)
+				Mnew[kappa] = C[kappa][j]
+			np.sort(Mnew)
+			# check for convergence
+			if np.array_equal(M, Mnew):
+				break
+			M = np.copy(Mnew)
+		else:
+		# final update of cluster memberships
+			J = np.argmin(D[:,M], axis=1)
+			for kappa in range(k):
+				C[kappa] = np.where(J==kappa)[0]
+		y_km=[None]*len(x)
+		for kappa in range(k): #把组赋值添加上。
+			for i in C[kappa]:
+				y_km[i]=kappa
+		centers=[]
+		for i in M:
+			centers.append(x.iloc[i,:])
+		centers1=pd.DataFrame(centers)
+		centers1.index=np.arange(len(M))
+		dfcenters=pd.DataFrame(centers1,columns=x.columns)
+		x['group']=y_km
+		centers=centers1.values
+	idx,_ = vq(df,centers)
+	size=np.bincount(idx)
+	finalseries=pd.Series([dfcenters,k,method,size,emethod,nmethod],index=['中心点','类数','聚类方法','聚类大小','空值处理方法','标准化方法'])
+	return (dfcenters,'k=%s.,聚类方法=%s.,聚类大小=%s.,空值处理方法=%s,异常值处理方法=%s,标准化方法=%s.'%(k,method,size,emethod,'箱形图',nmethod))
+#clustering(r'C:\Users\USUARIO\Desktop\work\pythonclustering.xlsx',method='k-means')
