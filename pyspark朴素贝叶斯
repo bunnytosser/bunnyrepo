@@ -1,0 +1,59 @@
+
+'''
+param:
+  label_data:pyspark.sql.dataframe.DataFrame
+  label_col:target column,'target'
+  unlabel_data:pyspark.sql.dataframe.DataFrame,default:'full'
+  features_col:feature column,['a','b']
+  randomSplit:float,0.7
+
+return:
+  confusion matrix
+  pre_data
+data = spark.sql('select * from bonc_sy.apriori1')
+import pyspark.sql.functions as sf
+data = data.withColumn('is_change', sf.lit(0))
+
+from Distributed.LR import LR
+result = NB(label_data = data,label_col = 'is_change',features_col = ["cracks","crocodile"])
+>>> result
+{'confusion_matrix': array([[1486]]), 'pre_data': DataFrame[methweeds: int, cocaine: int, cracks: int, lsdxtc: int, crocodile: int, heroin: int, ketamine: int, is_change: int, prediction: double]}
+'''
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.classification import NaiveBayes
+from pyspark.sql import SparkSession
+from sklearn.metrics import confusion_matrix
+spark = SparkSession.builder\
+        .master("local[2]")\
+        .appName("test")\
+        .getOrCreate()
+
+def NB(label_data,label_col,unlabel_data = 'null',features_col = 'full',randomSplit = 0.7):
+	columns = label_data.columns
+	if features_col == 'full':
+		features_col = columns.remove(label_col)
+	else:
+		features_col = features_col
+	if unlabel_data == 'null':
+		unlabel_data = label_data
+	else:
+		unlabel_data = unlabel_data
+	vector = VectorAssembler(inputCols = features_col,outputCol="features")
+	label_data1 = vector.transform(label_data)
+	data_pre1 = vector.transform(unlabel_data)
+	data_train = label_data1.withColumnRenamed(label_col,"label")
+	(data_train1,data_train2) = data_train.randomSplit([randomSplit,1-randomSplit])
+	nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
+	model = nb.fit(data_train1)
+	label_pred=model.transform(data_train2)
+	real=label_pred.select("label").collect()
+	prediction=label_pred.select("prediction").collect()
+	con_matrix=confusion_matrix(real,prediction)
+	#conmat=pd.DataFrame(con_matrix,columns=['T','F'])
+	#conmat.index=['T','F']
+	unlabel_data_pre = model.transform(data_pre1)
+	unlabel_data_pre_new = unlabel_data_pre.drop("features","rawPrediction","probability")
+	dict = {}
+	dict["pre_data"]=unlabel_data_pre_new
+	dict["confusion_matrix"]=con_matrix
+	return dict
