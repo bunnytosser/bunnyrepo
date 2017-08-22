@@ -1,0 +1,67 @@
+##参数说明：df，输入已经读取的数据框。x1为一个二维list。第一个元素用于类型转化。若为空[]则不使用此功能，若为一个list，则
+##其1,3,5,...元素表示列名，字符串格式，对应的2,4,6...元素分别对应列名的列所需转换为何种数据类型，同样是字符串形式的元素。例如['age','float','times','str']
+#表示age列转化为float类型，times转化为string类型。 x1的第二个元素也是list，提供空值填充的信息。若为空[]则不使用空值填充，若不为空，则其1,3,5,...元素表示列名，
+#字符串格式，对应的2,4,6...元素分别对应列名的列所需空值填充的方式，若为数字，则对应列填充为该数字，若为’mean‘，则填充该列的均值。
+#最后，**kwargs参数用于表示分类数据重新映射索引 的 列名和对应映射关系。
+
+	----
+from pyspark.sql import SQLContext
+import pandas as pd
+import numpy as np
+
+
+
+
+def datacleaning(df,x1,**kwargs): 
+	if x1[0]==[]:
+		pass
+	else:
+		for i in np.arange(len(x1[0])):
+			if (i % 2) == 0:
+			
+				df=df.withColumn(x1[0][i],df[x1[0][i]].cast(x1[0][i+1]))
+	
+	DF=df.toPandas()
+	if x1[1]==[]:
+		pass
+	else:
+		for i in np.arange(len(x1[1])):
+			if (i % 2) == 0:
+				if type(x1[1][i+1]) == int or type(x1[1][i+1]) == float:
+					DF[x1[1][i]].fillna(x1[1][i+1],inplace=True)
+				elif x1[1][i+1]=='mean':
+					DF[x1[1][i]].fillna(DF[x1[1][i]].mean(),inplace=True)
+	for key in kwargs:
+		DF[key]=DF[key].map(kwargs[key])
+	return(DF)
+
+	
+___
+
+##调用测试
+sqlContext = SQLContext(sc)	
+df=sqlContext.sql("select * from bonc_sy.classidata")
+x1=[['age','float','times','str'],['age',3,'fee','mean']]  #用于数据格式变化和空值处理的参数
+map1={1:'gone',0:'notgone'} #分类变量内容的映射
+kwargs={'ischange': map1} #变量名和映射方式一起作为参数
+DF1=datacleaning(df=df,x1=x1,**kwargs) #调用函数
+——————————
+——————————
+——————————
+###数据分割为测试集训练集：df为输入数据框，p为测试集的比例，范围为[0,1)
+
+from pyspark.sql import SQLContext
+import pandas as pd
+import numpy as np
+
+def Train_split(df,p):
+	if p>=0 and p<1:	
+		(trainingData, testData) = df.randomSplit([1-p, p])
+	elif p>=1 or p<0:
+		print('test rate should be within 0 and 1')
+		return(False)
+	return (trainingData, testData) 
+
+sqlContext = SQLContext(sc)	
+df=sqlContext.sql("select * from bonc_sy.classidata")
+(x3,x4)=Train_split(df,1.1)
