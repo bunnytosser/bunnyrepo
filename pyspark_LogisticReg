@@ -1,0 +1,78 @@
+Param:
+  label_data:pyspark.sql.dataframe.DataFrame
+  label_col:target column,'target'
+  unlabel_data:pyspark.sql.dataframe.DataFrame,default:'full'
+  features_col:feature column,['a','b']
+  randomSplit:float,0.7
+  fitIntercept:default:True,Optional:True/False
+  maxIter:int,100
+  family:default:'auto',Optional:'auto'/'multinomial'/'binary'
+  threshold:float,0.5
+return:
+  AUC
+  pre_data
+data = spark.sql('select * from bonc_sy.label_data')
+data_train = data
+data_test = data.drop("is_change")
+from Distributed.LR import LR
+result = LR(label_data = data_train,unlabel_data = data_test,label_col = 'is_change',features_col = ["duration_5_trand","present_evdo_flow","avg_present_evdo_flow"])
+result["AUC"]
+0.5778428449850942
+>>> result["pre_data"]
+DataFrame[acct_month: string, serv_id: string, cust_gender: string, avg_duration_5: float, duration_5_trand: float, present_evdo_flow: float, avg_present_evdo_flow: float, avg_present_1x_flow: float, duration_30: float, duration_30_range: float, amount_51: float, avg_amount_51: float, serv_state: string, prediction: double]
+>>> result['confusion_matrix']
+      T    F
+T  1125  305
+F  1023  472
+'''
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.classification import LogisticRegression
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from pyspark.sql import SparkSession
+from sklearn.metrics import confusion_matrix
+spark = SparkSession.builder\
+        .master("local[2]")\
+        .appName("test")\
+        .getOrCreate()
+
+def LR(label_data,label_col,unlabel_data = 'null',features_col = 'full',randomSplit = 0.7,fitIntercept=True,maxIter=100,family='auto',threshold=0.5):
+	columns = label_data.columns
+	if features_col == 'full':
+		features_col = columns.remove(label_col)
+	else:
+		features_col = features_col
+	if unlabel_data == 'full':
+		unlabel_data = label_data
+	else:
+		unlabel_data = unlabel_data
+	vector = VectorAssembler(inputCols = features_col,outputCol="features")
+	label_data1 = vector.transform(label_data)
+	data_pre1 = vector.transform(unlabel_data)
+	data_train = label_data1.withColumnRenamed(label_col,"label")
+	(data_train1,data_train2) = data_train.randomSplit([randomSplit,1-randomSplit])
+	lr = LogisticRegression(fitIntercept=True,maxIter=100,family='auto',threshold=0.5)
+	model = lr.fit(data_train1)
+	model_summary = model.summary
+	label_pred=model.transform(data_train2)
+	t1=label_pred.select("prediction")
+	t0=data_train2.select("label")
+	x2=label_pred.withColumn("real", t0.label).select("real","prediction")
+	real=x2.select("real").collect()
+	prediction=x2.select("prediction").collect()
+	con_matrix=confusion_matrix(real,prediction)
+	conmat=pd.DataFrame(con_matrix,columns=['T','F'])
+	conmat.index=['T','F']
+	roc1=model_summary.roc
+	result1=roc1.toPandas()
+	plt.plot(result1['FPR'],result1['TPR'])
+	plt.savefig('/kehuduan/bonc_sy/myfig.jpg')
+	unlabel_data_pre = model.transform(data_pre1)
+	AUC = model_summary.areaUnderROC
+	unlabel_data_pre_new = unlabel_data_pre.drop("features","rawPrediction","probability")
+	dict = {}
+	dict["AUC"]=AUC
+	dict["pre_data"]=unlabel_data_pre_new
+	dict["confusion_matrix"]=conmat
+	return dict
