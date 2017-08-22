@@ -1,0 +1,417 @@
+# -*- coding: utf-8 -*-
+"""
+说明：预测模型库的模型主要包括指数平滑法、ARIMA，本模型给出最优的ARIMA（p，d，q）及误差最小的
+linear，additive和multiplicative指数平滑法，比较两种方法的误差给出最佳的模型。
+参数一：filepath，支持csv、excel、dataframe数据框三种格式的输入
+参数二：startime，时间序列的开始时间
+参数三：endtime，时间序列的结束时间
+参数四：frequency，时间序列的基础频率，M 月，H 小时，D 日等
+参数五：cols，仅一列，支持输入列名或者第几列
+参数六：predictes，预测值的个数
+参数七：season，三重指数平滑法的季节周期长度，在指数linear，additive和multiplicative三种指数平滑的方式可以选择。
+方法为additive和multiplicative，需要季节周期长度参数，linear不需要季节周期长度参数
+参数八：nullprocess，空值处理方法，可选，默认为omit
+参数九：method，可选，默认是同时计算指数平滑和ARIMA，比较两种的精度给出最优方法
+data  2017-04-26
+author  汪明朕
+"""
+from __future__ import division
+from sys import exit
+from numpy import array
+from scipy.optimize import fmin_l_bfgs_b
+from statsmodels.tsa.arima_model import ARIMA
+from statsmodels.tsa.arima_model import ARIMAResults
+from math import sqrt
+import numpy as np
+import pandas as pd
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.stats import diagnostic
+import warnings
+import os
+import sys
+
+
+def RMSE(params, *args):
+	# 根据不同类型的模型，分别计算RMSE函数，返回值为RMSE函数
+
+    Y = args[0]
+    meth = args[1]  # 分别是第一和第二个参数，对应其他函数最优化RMSE时候，用到BFGS函数的args里面的参数
+    rmse = 0
+    if meth == 'linear':
+        alpha, beta = params
+        a = [Y[0]]
+        b = [Y[1] - Y[0]]
+        y = [a[0] + b[0]]
+        for i in range(len(Y)):
+            a.append(alpha * Y[i] + (1 - alpha) * (a[i] + b[i]))
+            b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+            y.append(a[i + 1] + b[i + 1])
+    else:
+        alpha, beta, gamma = params
+        m = args[2]
+        a = [sum(Y[0:m]) / float(m)]
+        b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+
+        if meth == 'additive':
+            s = [Y[i] - a[0] for i in range(m)]
+            y = [a[0] + b[0] + s[0]]
+
+            for i in range(len(Y)):
+                a.append(alpha * (Y[i] - s[i]) + (1 - alpha) * (a[i] + b[i]))
+                b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+                s.append(gamma * (Y[i] - a[i] - b[i]) + (1 - gamma) * s[i])
+                y.append(a[i + 1] + b[i + 1] + s[i + 1])
+
+        elif meth == 'multiplicative':
+            s = [Y[i] / a[0] for i in range(m)]
+            y = [(a[0] + b[0]) * s[0]]
+
+            for i in range(len(Y)):
+                a.append(alpha * (Y[i] / s[i]) + (1 - alpha) * (a[i] + b[i]))
+                b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+                s.append(gamma * (Y[i] / (a[i] + b[i])) + (1 - gamma) * s[i])
+                y.append((a[i + 1] + b[i + 1]) * s[i + 1])
+
+        else:
+
+            exit('meth must be either linear, additive or multiplicative')
+
+    rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y, y[:-1])]) / len(Y))
+
+    return rmse
+
+
+def linear(x, fc, alpha='null', beta='null'):
+    # 二重指数平滑模型。
+
+    YA = x[:]  # YA是实际的序列
+    Y = YA  # Y为时间序列预测的序列，设定其初始值等于实际序列
+
+    if (alpha == 'null' or beta == 'null'):
+        initial_values = array([0.3, 0.1])
+        boundaries = [(0, 1), (0, 1)]
+        meth = 'linear'  # 设定参数初始值和参数边界， 并且在RMSE函数计算中，输入类型设定为‘linear’
+
+        parameters = fmin_l_bfgs_b(RMSE, x0=initial_values, args=(Y, meth), bounds=boundaries, approx_grad=True)
+        alpha, beta = parameters[0]
+	# 使用BFGS—B方法进行最优化。其本质是一种拟牛顿的方法。参数分别为：
+	# func : 需要在最小化的目标函数
+	# x0 : 对初始值的猜测
+	# fprime : callable fprime(x,*args)
+	#    The gradient of func. If None, then func returns the function value and the gradient (f, g = func(x, *args)), unless approx_grad is True in which case func returns only f.
+	# args : 传递给函数和fprime的argument
+	# approx_grad : bool 是否从数值上估计梯度
+	# bounds : 参数边界
+
+    a = [Y[0]]
+    b = [Y[1] - Y[0]]
+    y = [a[0] + b[0]]
+    rmse = 0
+
+    for i in range(len(Y) + fc):
+
+        if i == len(Y):
+            Y = Y.append(pd.Series((a[-1] + b[-1]), index=[Y.index[-1] + 1]))
+
+        a.append(alpha * Y[i] + (1 - alpha) * (a[i] + b[i]))
+        b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+        y.append(a[i + 1] + b[i + 1])
+
+    rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+    Y = pd.Series(y[1:], index=[Y.index])
+    res = YA - Y
+    fra1 = pd.concat([Y, YA, res], axis=1)
+    fra1.columns = ['linear fitted', 'actual', 'residual']
+    fra1.plot()
+    return Y[-fc:], 'alpha:', alpha, 'beta:', beta, 'rmse:', rmse
+
+
+def additive(x, m, fc, alpha='null', beta='null', gamma='null'):  # 可加性三重指数平滑法
+
+    YA = x[:]
+    Y = YA  # Y为时间序列
+
+    if (alpha == 'null' or beta == 'null' or gamma == 'null'):
+		# 若未指定参数，则自动最优化选择
+
+        initial_values = array([0.3, 0.1, 0.1])  # 设定初始值
+        boundaries = [(0, 1), (0, 1), (0, 1)]  # 设定参数的范围0-1
+        meth = 'additive'  # 在RMSE的求解方程中，设定使用的是additive的方法。
+
+        parameters = fmin_l_bfgs_b(RMSE, x0=initial_values, args=(Y, meth, m), bounds=boundaries, approx_grad=True)
+        alpha, beta, gamma = parameters[0]
+
+    a = [sum(Y[0:m]) / float(m)]  # 初始值的设定
+    b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+    s = [Y[i] - a[0] for i in range(m)]
+    y = [a[0] + b[0] + s[0]]
+    rmse = 0
+    for i in range(len(Y) + fc):
+        if i >= len(Y):
+            Y = Y.append(pd.Series((a[-1] + b[-1] + s[-m]), index=[Y.index[-1] + 1]))
+        a.append(alpha * (Y[i] - s[i]) + (1 - alpha) * (a[i] + b[i]))
+        b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+        s.append(gamma * (Y[i] - a[i] - b[i]) + (1 - gamma) * s[i])
+        y.append(a[i + 1] + b[i + 1] + s[i + 1])
+
+    rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+    Y = pd.Series(y[1:], index=[Y.index])
+    res = YA - Y
+    additive.fra1 = pd.concat([Y, YA, res], axis=1)
+    additive.fra1.columns = ['additive fitted', 'actual', 'residual']
+    fra1 = pd.concat([Y, YA, res], axis=1)
+    fra1.columns = ['additive fitted', 'actual', 'residual']
+    fra1.plot()
+    return Y[-fc:], 'alpha:', alpha, 'beta:', beta, 'gamma:', gamma, 'rmse:', rmse
+
+
+def multiplicative(x, m, fc, alpha='null', beta='null', gamma='null'):  # 可乘季节趋势三重指数平滑法
+
+    YA = x[:]
+    Y = YA  # Y为时间序列
+
+    if (alpha == 'null' or beta == 'null' or gamma == 'null'):
+        initial_values = array([0.0, 1.0, 0.0])
+        boundaries = [(0, 1), (0, 1), (0, 1)]
+        meth = 'multiplicative'
+
+        parameters = fmin_l_bfgs_b(RMSE, x0=initial_values, args=(Y, meth, m), bounds=boundaries, approx_grad=True)
+        alpha, beta, gamma = parameters[0]
+
+    a = [sum(Y[0:m]) / float(m)]
+    b = [(sum(Y[m:2 * m]) - sum(Y[0:m])) / m ** 2]
+    s = [Y[i] / a[0] for i in range(m)]
+    y = [(a[0] + b[0]) * s[0]]
+    rmse = 0
+    for i in range(len(Y) + fc):
+        if i >= len(Y):
+            Y = Y.append(pd.Series((a[-1] + b[-1]) * s[-m], index=[Y.index[-1] + 1]))
+
+        a.append(alpha * (Y[i] / s[i]) + (1 - alpha) * (a[i] + b[i]))
+        b.append(beta * (a[i + 1] - a[i]) + (1 - beta) * b[i])
+        s.append(gamma * (Y[i] / (a[i] + b[i])) + (1 - gamma) * s[i])
+        y.append((a[i + 1] + b[i + 1]) * s[i + 1])
+    rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(Y[:-fc], y[:-fc - 1])]) / len(Y[:-fc]))
+    Y = pd.Series(y[1:], index=[Y.index])
+    res = YA - Y
+    fra1 = pd.concat([Y, YA, res], axis=1)
+    fra1.columns = ['multiplicative fitted', 'actual', 'residual']
+    fra1.plot()
+    return Y[-fc:], 'alpha:', alpha, 'beta:', beta, 'gamma:', gamma, 'rmse:', rmse
+""""
+模型1整合
+"""
+def Holt_Winters(sdata, fc, method='null', m='null', alpha='null', beta='null', gamma='null'):
+    dta = sdata
+    x = dta
+    if method == 'null':
+        lin = linear(x, fc, alpha, beta)[-1]
+        add = additive(x, m, fc, alpha, beta, gamma)[-1]
+        mul = multiplicative(x, m, fc, alpha, beta, gamma)[-1]
+        rmselist = [('linear', lin), ('additive', add), ('multiplicative', mul)]
+        minumum = min(rmselist, key=lambda r: r[1])
+        method = minumum[0]
+    if method == 'linear':
+        model = linear(x, fc, alpha, beta)
+    elif method == 'additive':
+        model = additive(x, m, fc, alpha, beta, gamma)
+    elif method == 'multiplicative':
+        model = multiplicative(x, m, fc, alpha, beta, gamma)
+    else:
+        print('invalid method,please ensure the correct method is specified')
+        return False
+    return ('method', method, model)
+
+def auto_arima(sdate, step, p='null', d='null', q='null'):
+    dta = sdate
+    if d == 'null':
+        if adfuller(dta, regression='ct')[1] >= 0.05:  # 用增广Dickey-Fuller检验，检验序列是否平稳，若不平稳，则取d阶差分，直到其平稳为止。
+            for i in np.arange(10):
+                diff = dta.diff(i + 1)
+                diffseries = diff[i + 1:]
+                adt = adfuller(diffseries, regression='ct')[1]
+                if adt <= 0.05:
+                    d = i + 1
+                    break
+                elif adt > 0.05 and i + 1 == 5:  # 若取了5阶差分扔不平稳，考虑到后面会损失太多的观测值，那么不取差分，直接用原数据。
+                    d = 0
+        else:  # 若本来就平稳，则不取差分，ARIMA模型中的d=0.
+            d = 0
+    dta = dta.astype('float64')  # 如果时间序列数据类型是int，后面可能会出问题，先进行转化为float64格式
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # 忽略警告，否则可能弹出大量关于ML最优化收敛的警告信息。
+        if type(dta.index) == pd.tseries.period.PeriodIndex:  # 如果时间序列的index是period，则转化为timestamp，方便后面预测。
+            ind = dta.index
+            dta.index = ind.to_timestamp()
+        if p == 'null' or q == 'null':  # 若用户没有自定义ARMA阶数，则根据BIC准则自动判断
+            maxp = int(len(dta) / 10)  # 设置p和q的最大阶数，对于小样本，太大的阶数损失太多观测值，没有意义。
+            maxq = int(len(dta) / 10)
+            biclist = []  # 根据BIC标准，选择理想的阶数。
+            for p in range(maxp + 1):
+                tmp = []
+                for q in range(maxq + 1):  # 存在部分报错，所以用try来跳过报错。
+                    try:
+                        tmp.append(ARIMA(dta, (p, d, q)).fit().bic)
+                    except:
+                        tmp.append(None)
+                biclist.append(tmp)
+            biclist = pd.DataFrame(biclist)  # 将biclist转化为相应的数据框
+            # 先用stack展平，然后用idxmin找出最小值位置。
+            try:
+                p, q = biclist.stack().idxmin()
+            except:
+                return ('无法计算模型BIC，请手动输入阶数')  # 考虑到有可能biclist是空数据框的情况。（很罕见）
+
+        model = ARIMA(dta, (p, d, q)).fit()  # 利用前面选择的阶数的ARIMA，建立模型
+        resid = model.resid  # 计算模型残差
+        # 对残差进行LJB检验，原假设和备选假设分别为:
+        # H0: 数据独立分布
+        # Ha: 数据不独立，存在序列相关性
+        fitted = resid + dta  # 计算模型拟合值
+        rmse = sqrt(sum([(m - n) ** 2 for m, n in zip(fitted[1:], dta[1:])]) / len(dta[1:]))
+        if diagnostic.acorr_ljungbox(resid, lags=1, boxpierce=False)[1] > 0.05:
+            LBJ = 'LB检验通过，残差无滞后相关，ARIMA模型合适'  # 允许最后函数会返回LB检验的结论。
+        else:
+            LBJ = 'LB检验未通过，残差存在滞后相关，以下ARIMA模型未必合适，仅供参考'
+
+        if type(dta.index) == pd.tseries.period.PeriodIndex:  # 如果时间序列的index是period，则转化为timestamp，方便后面预测。
+            ind = dta.index
+            dta.index = ind.to_timestamp()
+        fore = model.forecast(step)[0]  # arima预测结果
+        pvalue = model.forecast(step)[1]  # arima预测的p值
+        foremin = model.forecast(step)[2][:, 0]  # 根据95%置信区间，预测的最大值和最小值
+        foremax = model.forecast(step)[2][:, 1]
+        steps = np.arange(step) + 1
+        f = pd.DataFrame({'预测时长': steps, '预测': fore, 'p值': pvalue, '预测最小值': foremin, '预测最大值': foremax})
+        # model.plot_predict(1, len(dta) + step)  # 作出时间序列预测图
+        # (LBJ, '根据BIC自动选取的ARIMA阶数：', 'p=', p, 'd=', d, 'q=', q, f, '模型的rmse=', rmse)
+        return (LBJ, '根据BIC自动选取的ARIMA阶数：', 'p=', p, 'd=', d, 'q=', q, f, '模型的rmse=', rmse)
+
+def Series_Prediction(filepath,startime,endtime,frequency,cols,predicted,season,nullprocess='omit',method='NULL',outpath ='output'):
+    if type(filepath) == str and filepath[-5:] == '.xlsx':
+        if os.path.exists(filepath) == False:
+            fileerror = "文件名不存在！请检查后重新调用函数。"
+            print(fileerror)
+            return False
+        dta = pd.read_excel(filepath)
+    elif type(filepath) == str and filepath[-4:] == '.csv':
+        if os.path.exists(filepath) == False:
+            fileerror = "文件名不存在！请检查后重新调用函数。"
+            print(fileerror)
+            return False
+        dta = pd.read_csv(filepath)
+    elif type(filepath) == pd.core.frame.DataFrame or type(filepath) == pd.core.series.Series:
+        dta = filepath
+    else:
+        print('不支持的文件扩展名或者不存在的数据框')
+        return False
+    #####
+        # 调整选取的列名
+    index = pd.period_range(startime, endtime, freq=frequency)
+    index = pd.PeriodIndex(index)
+    if type(cols) == int:
+        cols = (dta.columns[cols])
+        nullcount=dta[cols].count()
+        # print(nullcount)
+        dta = dta[cols]
+    else:
+        dta = dta[cols]
+        nullcount = dta.count()
+        # print(nullcount)
+    dta = pd.Series(dta[:len(index)].values, index=index)
+    t1 = np.isnan(dta)
+    if nullprocess == 'omit':
+        dta = dta[~t1]
+    elif nullprocess == 'average':
+        for j in np.arange(len(dta)):
+            if np.isnan(dta[j]) == True:
+                try:
+                    nex = next(x for x in dta[j:] if np.isnan(x) == False)
+                except:
+                    nex = next(x for x in dta[:j].ix[::-1] if np.isnan(x) == False)
+                try:
+                    las = next(x for x in dta[:j].ix[::-1] if np.isnan(x) == False)
+                except:
+                    las = next(x for x in dta[j:] if np.isnan(x) == False)
+                dta[j] = (las + nex) / 2
+        dta = dta
+    else:
+        dta[t1] = nullprocess
+        # return (dta)
+    if method=='NULL':
+        method1 =auto_arima(sdate=dta, step=predicted)
+        method2=Holt_Winters(sdata=dta, fc=predicted, m=season)
+        if method1[10]<method2[2][6]:
+            if outpath == 'output':
+                pass
+            elif type(outpath) == str and outpath[-4:] == '.csv':
+                pd.Series(method2).to_csv(outpath)
+            else:
+                outerror = 'wrong directory,csv file supported only'
+                return outerror
+            return ('最优方法是指数平滑平：',method2)
+        else:
+            if outpath == 'output':
+                pass
+            elif type(outpath) == str and outpath[-4:] == '.csv':
+                pd.Series(method1).to_csv(outpath)
+            else:
+                outerror = 'wrong directory,csv file supported only'
+                return outerror
+            return ('最优方法是ARIMA：',method1)
+    if method =='ARIMA':
+        method1 = auto_arima(sdate=dta, step=predicted)
+        if outpath == 'output':
+            pass
+        elif type(outpath) == str and outpath[-4:] == '.csv':
+            pd.Series(method1).to_csv(outpath)
+        else:
+            outerror = 'wrong directory,csv file supported only'
+            return outerror
+        return method1
+    if method=='smoothing':
+        method2 = Holt_Winters(sdata=dta, fc=predicted, m=season)
+        if outpath == 'output':
+            pass
+        elif type(outpath) == str and outpath[-4:] == '.csv':
+            pd.Series(method2).to_csv(outpath)
+        else:
+            outerror = 'wrong directory,csv file supported only'
+            return outerror
+        return method2
+# Series_Prediction(filepath,startime,endtime,frequency,cols,predicted,season,nullprocess='omit',method='NULL',outpath ='output')
+
+# inputstr = sys.argv
+# filepath = inputstr[1]
+# startime = inputstr[2]
+# endtime = inputstr[3]
+# frequency = inputstr[4]
+# cols = inputstr[5]
+# predicted = int(inputstr[6])
+# season = int(inputstr[7])
+# nullprocess1 = inputstr[8]
+# if nullprocess1 == ['omit']:
+#     nullprocess1 = 'omit'
+# else:
+#     nullprocess1 = nullprocess1
+# method1 = inputstr[9]
+# if method1 == ['NULL']:
+#     method1 ='NULL'
+# else:
+#     method1 = method1
+# outpath1 = inputstr[-1]
+# if outpath1 == ['output']:
+#     outpath = 'output'
+# else:
+#     outpath = outpath1
+# print(Series_Prediction(filepath,startime,endtime,frequency,cols,predicted,season,nullprocess=nullprocess1,method=method1,outpath=outpath1))
+
+# t=Series_Prediction(r'G:\序列预测样本数据.xlsx',startime='2011-6',endtime='2014-5',
+#                     frequency='M',cols='新户均流量',predicted=5,season=4,nullprocess='omit',method='NULL',outpath='F:\sb.csv')
+# print(t)
+# t=Series_Prediction(filepath=r'C:\Users\AugustBell\Desktop\测试的文件\序列预测样本数据.xlsx',\
+#                     startime='2011-6',endtime='2014-5',frequency='M',cols='新户均流量',\
+#                     predicted=5,season=4,nullprocess='average',method='NULL',\
+#                     outpath=r'C:\Users\AugustBell\Desktop\导出的结果\aaa.csv')
+# print(t)
+# print(type(t))
