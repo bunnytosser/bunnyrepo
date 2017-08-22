@@ -1,0 +1,63 @@
+
+'''
+df:pyspark.sql.dataframe.DataFrame, dataframe type(should be normalized beforehand)
+d: interger indicating the desired reduced dimension from PCA analysis
+return:explained variance, eigenvalues of the first d elements and their corresponding eigenvectors, loading vectors,
+and transformed data
+
+
+>>> PCAanalysis(df)
+{'transformed data': DataFrame[prod_id: bigint, avg_m_before: double, avg_m_period: double, is_tf1: bigint, is_tf: bigint, no.0 element: double, no.1 element: double], 'loadings': DataFrame[prod_id: double, avg_m_before: double, avg_m_period: double, is_tf1: double, is_tf: double], 'explained variance': DataFrame[0: double], 'eigenvectors': DataFrame[prod_id: double, avg_m_before: double, avg_m_period: double, is_tf1: double, is_tf: double], 'eigen values': DataFrame[0: double]}
+
+from pyspark.sql import SQLContext
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA
+import math
+from pyspark.sql import SparkSession
+spark = SparkSession.builder\
+        .master("local[2]")\
+        .appName("test")\
+        .getOrCreate()
+def PCAanalysis(df,col='full',d=2):
+	DF=df.toPandas()
+	if col=='full':
+		col=DF.columns
+		DF=DF
+	else:
+		DF=DF[col]
+	if d<DF.shape[1]:
+		pca = PCA(n_components=d)
+		pca.fit(DF)
+		explainedvar=pca.explained_variance_ratio_
+		n_samples = DF.shape[0]
+		cov_matrix = np.dot(DF.T, DF) / n_samples
+		eigenvalues=[]
+		eigenvectors=pca.components_
+		for eigenvector in pca.components_:
+			eigenvalues.append(np.dot(eigenvector.T, np.dot(cov_matrix, eigenvector)))
+		loadings=[]
+		for j in np.arange(d):
+			sqrteig=math.sqrt(eigenvalues[j])
+			loadings.append([i*sqrteig for i in eigenvectors[j]])
+		DF1=pca.fit_transform(DF)
+	elif  d>=DF.shape[1]:
+		return ('dimension is not reduced')
+	dict={}
+	explainedvar=pd.DataFrame(explainedvar)
+	explainedvar=spark.createDataFrame(explainedvar)
+	eigenvalues=pd.DataFrame(eigenvalues)
+	eigenvalues=spark.createDataFrame(eigenvalues)
+	dict['explained variance']=explainedvar
+	dict['eigen values']=eigenvalues
+	loadings=pd.DataFrame(loadings,columns=col)
+	eigenvectors=pd.DataFrame(eigenvectors,columns=col)
+	eigenvectors=spark.createDataFrame(eigenvectors)
+	dict['eigenvectors']=eigenvectors
+	loadings=spark.createDataFrame(loadings)
+	dict['loadings']=loadings
+	for i in np.arange(DF1.shape[1]):
+		DF['no.'+str(i)+' element']=DF1[:,i]
+	DFn=spark.createDataFrame(DF)
+	dict['transformed data']=DFn
+	return(dict)
