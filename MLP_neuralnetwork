@@ -1,0 +1,109 @@
+import pandas as pd
+import numpy as np
+
+
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+from sklearn import preprocessing
+from pandas import get_dummies
+import os
+from sklearn.metrics import roc_curve, auc
+
+def MLPNN(filepath,y,layer,test_rate=0.2, x='null',activation='logistic',max_iter=500, alpha=0.001,
+                         solver='sgd',learning_rate_init=0.001,
+                         tol=0.0000001,outpath='null',perpath='null'):
+    ##查看文件类型，载入文件
+    if type(filepath) == str and filepath[-5:] == '.xlsx':
+        if os.path.exists(filepath) == False:
+            return ("文件名不存在！请检查后重新调用函数。")
+        df1 = pd.read_excel(filepath, index_col=0)
+    elif type(filepath) == str and filepath[-4:] == '.csv':
+        if os.path.exists(filepath) == False:
+            return ("文件名不存在！请检查后重新调用函数。")
+        df1 = pd.read_csv(filepath, index_col=0)
+    elif type(filepath) == pd.core.frame.DataFrame:
+        df1 = filepath
+    else:
+        print('不支持的文件扩展名或者不存在的数据框')
+        return False
+    #分别定义自变量因变量
+    target=y
+    df1=df1.fillna(0)
+    y=df1[y]
+    if x == 'null':
+        cols=list(df1.columns)
+        cols.remove(target)
+        x=cols
+    else:
+        if type(x[0]) == str and set(np.array(x)) - set(np.array(df1.dtypes.index)) != set():
+            wrongcol = set(np.array(x)) - set(np.array(df1.dtypes.index))
+            return ('错误的列', wrongcol)
+        elif type(x[0]) == int:
+            if set(x) - set(np.arange(len(df1.columns))) != set():
+                wrongcolumn = set(x) - set(np.arange(len(df1.columns)))
+                return ('错误的列', wrongcolumn)
+            else:
+                x = list(df1.columns[x])
+    x = df1[x]
+    #分类变量弄成dummy variables
+    x=get_dummies(x,drop_first=True)
+    #分裂训练集测试集
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=test_rate)
+    #训练集构建MLP
+    clf = MLPClassifier(hidden_layer_sizes=layer, activation=activation, max_iter=max_iter, alpha=alpha,
+                         solver=solver, verbose=10, learning_rate='constant', learning_rate_init=learning_rate_init, random_state=21,
+                         tol=tol)
+    clf.fit(x_train, y_train)
+    #测试机进行测试
+    y_pred = clf.predict(x_test)
+    #模型的贫姑
+    accuracy = accuracy_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
+    precision = cm[0][0] / sum(cm[0])
+    recall = cm[0][0] / (cm[0][0] + cm[1][0])
+    score1=clf.score(x_test,y_test)
+    f = 2 * (precision * recall) / (precision + recall)
+    pred_class=clf.predict(x)
+    df1['pred_class']=pred_class
+    #print('accuracy=',accuracy, 'precision=',precision, 'recall=',recall,'f=',f,'layer=',layer)
+    performance = pd.Series([accuracy, precision, recall, f, layer],
+                        index=['accuracy', 'precision', 'recall', 'f', 'layer'])
+    accuracy = pd.DataFrame([{'accuracy':accuracy}])
+    precision = pd.DataFrame([{'precision':precision}])
+    recall = pd.DataFrame([{'recall':recall}])
+    f = pd.DataFrame([{'f':f}])
+    layer = pd.DataFrame([{'layer':layer}])
+
+    dict={}
+    dict['accuracy'] = accuracy
+    dict['precision'] = precision
+    dict['recall'] = recall
+    dict['f'] = f
+    dict['layer'] = layer
+    dict['df1'] = df1
+
+    if outpath == 'null':
+        pass
+    elif type(outpath) == str and outpath[-4:] == '.csv':
+        df1.to_csv(outpath)
+    else:
+        outerror = "wrong directory, csv file supported only"
+        return outerror
+    if perpath == 'null':
+        pass
+    elif type(perpath) == str and perpath[-4:] == '.csv':
+        with open(perpath, "w") as csvFile:
+            csvWriter = csv.writer(csvFile)
+            for k, v in performance.items():
+                csvWriter.writerow([k, v])
+            csvFile.close()
+    else:
+        outerror = "wrong directory, csv file supported only"
+        # print(outerror)
+        return outerror
+    return dict
+#MLPNN(r'C:\Users\USUARIO\Desktop\work\model 10\bookdata1.csv',y='flowonce',test_rate=0.2, layer=(100,100),activation='logistic',max_iter=600,tol=0.00000001,perpath=r'C:\Users\USUARIO\Desktop\work\model 10\wwwwwa.csv')
+
