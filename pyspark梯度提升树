@@ -1,0 +1,62 @@
+param:
+  label_data:pyspark.sql.dataframe.DataFrame
+  label_col:target column,'target'
+  unlabel_data:pyspark.sql.dataframe.DataFrame,default:'full'
+  features_col:feature column,['a','b']
+  randomSplit:float,0.7
+  maxIter:int,10
+
+return:
+  confusion_matrix
+  pre_data
+  
+data = spark.sql('select * from bonc_sy.label_data')
+data_train = data
+GBT(label_data = data_train,unlabel_data = data_test,label_col = 'is_change',features_col = ["duration_5_trand","present_evdo_flow","avg_present_evdo_flow"])
+
+>>> gbt1=GBT(label_data = data_train,unlabel_data = data_test,label_col = 'is_change',features_col = ["duration_5_trand","present_evdo_flow","avg_present_evdo_flow"])
+>>> gbt1
+{'confusion_matrix':      T    F
+T  806  659
+F  649  893, 'pre_data': DataFrame[acct_month: string, serv_id: string, cust_gender: string, avg_duration_5: float, duration_5_trand: float, present_evdo_flow: float, avg_present_evdo_flow: float, avg_present_1x_flow: float, duration_30: float, duration_30_range: float, amount_51: float, avg_amount_51: float, serv_state: string, prediction: double]}
+
+from pyspark.ml import Pipeline
+from pyspark.ml.classification import GBTClassifier
+from pyspark.ml.feature import StringIndexer, VectorIndexer
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml.feature import VectorAssembler
+
+from pyspark.sql import SQLContext
+import pandas as pd
+from pyspark.sql import SparkSession
+from sklearn.metrics import confusion_matrix
+
+def GBT(label_data,label_col,unlabel_data = 'null',features_col = 'full',randomSplit = 0.7,MaxIter=10):
+	columns = label_data.columns
+	if features_col == 'full':
+		features_col = columns.remove(label_col)
+	else:
+		features_col = features_col
+	if unlabel_data == 'full':
+		unlabel_data = label_data
+	else:
+		unlabel_data = unlabel_data
+	vector = VectorAssembler(inputCols = features_col,outputCol="features")
+	label_data1 = vector.transform(label_data)
+	data_pre1 = vector.transform(unlabel_data)
+	data_train = label_data1.withColumnRenamed(label_col,"label")
+	(data_train1,data_train2) = data_train.randomSplit([randomSplit,1-randomSplit])
+	gbt = GBTClassifier(labelCol="label", featuresCol="features", maxIter=MaxIter)
+	model=gbt.fit(data_train1)
+	label_pred=model.transform(data_train2)
+	real=label_pred.select("label").collect()
+	prediction=label_pred.select("prediction").collect()
+	con_matrix=confusion_matrix(real,prediction)
+	conmat=pd.DataFrame(con_matrix,columns=['T','F'])
+	conmat.index=['T','F']
+	unlabel_data_pre = model.transform(data_pre1)
+	unlabel_data_pre_new = unlabel_data_pre.drop("features","rawPrediction","probability")
+	dict = {}
+	dict["pre_data"]=unlabel_data_pre_new
+	dict["confusion_matrix"]=conmat
+	return dict
