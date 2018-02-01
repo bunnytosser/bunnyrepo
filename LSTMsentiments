@@ -1,0 +1,374 @@
+
+# coding: utf-8
+
+# In[1]:
+
+
+import yaml
+import sys
+from sklearn.cross_validation import train_test_split
+import multiprocessing
+import numpy as np
+from gensim.models.word2vec import Word2Vec
+from gensim.corpora.dictionary import Dictionary
+
+from keras.preprocessing import sequence
+from keras.models import Sequential
+from keras.layers.embeddings import Embedding
+from keras.layers.recurrent import LSTM
+from keras.layers.core import Dense, Dropout,Activation
+from keras.models import model_from_yaml
+np.random.seed(1337)  # For Reproducibility
+import jieba
+import pandas as pd
+import re
+from collections import Counter
+import jieba.posseg as pseg
+import io
+import h5py
+
+
+# In[2]:
+
+
+from gensim.models.word2vec import Word2Vec
+from gensim.corpora.dictionary import Dictionary
+
+
+# In[38]:
+
+
+sys.setrecursionlimit(1000000)
+# set parameters:
+vocab_dim = 128
+maxlen = 128
+n_iterations = 10# ideally more..
+n_exposures = 5
+window_size = 7
+batch_size = 32
+n_epoch = 4
+input_length = 128
+cpu_count = multiprocessing.cpu_count()
+negative_words=5
+
+
+# In[4]:
+
+
+data=pd.read_csv('sentimentstraining.csv',header=None)
+
+
+# In[88]:
+
+
+def clean_string(string):
+    string = re.sub("\n","", string)
+    string = re.sub("\t","", string)
+    string_list = [w for w,t in pseg.cut(string) if w != " "]
+    return string_list
+
+# def load_data_and_labels(df):
+#     x_raw = df.text.apply(clean_string).tolist()
+#     with io.open("clean_output.txt","w",encoding = "utf-8") as f:
+#         f.write("\n".join(x_raw))
+
+#     #x_raw = df.text.tolist()
+#     labels = sorted(list(set(df.label.tolist())))
+#     onehot = np.zeros((len(labels),len(labels)), np.int)
+#     np.fill_diagonal(onehot, 1)
+#     labels_dict = dict(zip(labels, onehot))
+#     y_raw = df.label.apply(lambda s: labels_dict[s])
+
+#     return x_raw, np.array(y_raw.values.tolist()),labels_dict
+
+
+# In[89]:
+
+
+
+# text =  [w for w,t in pseg.cut(joined_sentences) if w not in stoplist and w != " " and len(w) > 1 and t not in stop_flag]
+# vocab=set(clean_string(joined_sentences))
+# vocab_list=list(vocab)
+
+
+# In[90]:
+
+
+# len(vocab_list)
+# embedding_vectors=load_embedding_vectors(vocab_list,"wiki.zh.text.vector")
+
+
+# In[91]:
+
+
+def load_embedding_vectors(vocabulary, filename):
+    encoding = "utf-8"
+
+    with open(filename, "rb") as f:
+        header = f.readline()
+        vocab_size, vector_size = map(int, header.split())
+        embedding_vectors = np.random.uniform(-0.25, 0.25, (len(vocabulary), vector_size))
+        binary_len = np.dtype('float32').itemsize * vector_size
+
+        for line in range(vocab_size):
+            #print(line)
+            word = []
+            while True:
+                ch = f.read(1)
+                if ch == b' ':
+                    break
+                if ch == b'':
+                    raise EOFError("unexpected end of input; is count incorrect or file otherwise damaged?")
+                if ch != b'\n':
+                    word.append(ch)
+
+            word = str(b''.join(word), encoding = 'utf-8', errors = 'strict')
+            idx = vocabulary.get(word)
+            if idx != 0:
+                embedding_vectors[idx] = np.fromstring(f.read(binary_len), dtype='float32')  
+            else:
+                f.seek(binary_len,1) 
+        f.close()
+        return embedding_vectors
+#/root/notebook/nixm/news-classifier/wiki.zh.text.vector
+
+
+# In[92]:
+
+
+def create_dictionaries(model=None,
+                        combined=None):
+    ''' Function does are number of Jobs:
+        1- Creates a word to index mapping
+        2- Creates a word to vector mapping
+        3- Transforms the Training and Testing Dictionaries
+    '''
+    if (combined is not None) and (model is not None):
+        gensim_dict = Dictionary()
+        gensim_dict.doc2bow(model.wv.vocab.keys(),
+                            allow_update=True)
+        w2indx = {v: k+1 for k, v in gensim_dict.items()}#所有频数超过10的词语的索引
+        w2vec = {word: model[word] for word in w2indx.keys()}#所有频数超过10的词语的词向量
+
+        def parse_dataset(combined):
+            ''' Words become integers
+            '''
+            data=[]
+            for sentence in combined:
+                new_txt = []
+                for word in sentence:
+                    try:
+                        new_txt.append(w2indx[word])
+                    except:
+                        new_txt.append(0)
+                data.append(new_txt)
+            return data
+        combined=parse_dataset(combined)
+        combined= sequence.pad_sequences(combined, maxlen=maxlen)#每个句子所含词语对应的索引，所以句子中含有频数小于10的词语，索引为0
+        return w2indx, w2vec,combined
+    else:
+        print ('No data provided...')
+
+
+#创建词语字典，并返回每个词语的索引，词向量，以及每个句子所对应的词语索引
+def word2vec_train(combined):
+
+    model = Word2Vec(size=vocab_dim,
+                     min_count=n_exposures,
+                     window=window_size,
+                     workers=cpu_count,
+                     iter=n_iterations,negative=negative_words)
+    model.build_vocab(combined)
+    model.train(combined,total_examples=model.corpus_count,epochs=model.iter)
+    model.save('lstm_data/Word2vec_model.pkl')
+    index_dict, word_vectors,combined = create_dictionaries(model=model,combined=combined)
+    return   index_dict, word_vectors,combined
+
+#split the dataset into train and test.
+def get_data(index_dict,word_vectors,combined,y):
+
+    n_symbols = len(index_dict) + 1  #  Size of the vocabulary, i.e. maximum integer index + 1.
+    embedding_weights = np.zeros((n_symbols, vocab_dim))#索引为0的词语，词向量全为0
+    for word, index in index_dict.items():#从索引为1的词语开始，对每个词语对应其词向量
+        embedding_weights[index, :] = word_vectors[word]
+    np.random.seed(10)
+    shuffle_indices = np.random.permutation(np.arange(len(y)))
+    x_shuffled = combined[shuffle_indices]
+    y_shuffled = y[shuffle_indices]
+    dev_sample_index = -1 * int(0.2 * float(len(y)))
+    x_train, x_test = x_shuffled[:dev_sample_index], x_shuffled[dev_sample_index:]
+    y_train, y_test = y_shuffled[:dev_sample_index], y_shuffled[dev_sample_index:]
+    x_train, x_test, y_train, y_test = train_test_split(combined, y, test_size=0.2)
+    print (x_train.shape,y_train.shape,x_test.shape)
+    return n_symbols,embedding_weights,x_train,y_train,x_test,y_test
+
+
+# In[93]:
+
+
+# joined_sentences=[clean_string(str(sentence)) for sentence in data.iloc[:,0]]
+# text =  [w for w,t in pseg.cut(joined_sentences) if w not in stoplist and w != " " and len(w) > 1 and t not in stop_flag]
+# vocab=set(clean_string(joined_sentences))
+# vocab_list=list(vocab)
+
+
+# In[94]:
+
+
+# model = Word2Vec(size=vocab_dim,
+#                      min_count=n_exposures,
+#                      window=window_size,
+#                      workers=cpu_count,
+#                      iter=n_iterations)
+# model.build_vocab(joined_sentences) 
+# # #Build vocabulary from a sequence of sentences (can be a once-only generator stream). 
+# # #Each sentence must be a list of unicode strings.
+# model.train(joined_sentences,total_examples=model.corpus_count,epochs=model.iter)
+# index_dict, word_vectors,combined=create_dictionaries(model=model,combined=joined_sentences)
+joined_sentences=[clean_string(str(sentence)) for sentence in data.iloc[:,0]]
+index_dict, word_vectors,combined=word2vec_train(joined_sentences)
+
+
+# In[95]:
+
+
+y=data.iloc[:,1]
+n_symbols,embedding_weights,x_train,y_train,x_test,y_test=get_data(index_dict, word_vectors,combined,y)
+
+
+# In[96]:
+
+
+#Define the LSTM model structures
+
+def train_lstm(n_symbols,embedding_weights,x_train,y_train,x_test,y_test):
+    print ('Defining a Simple Keras Model...')
+    model = Sequential()  # or Graph or whatever
+    model.add(Embedding(output_dim=vocab_dim,
+                        input_dim=n_symbols,
+                        mask_zero=True,
+                        weights=[embedding_weights],
+                        input_length=input_length))  # Adding Input Length
+    model.add(LSTM(recurrent_activation="hard_sigmoid", kernel_initializer="glorot_uniform", recurrent_initializer="orthogonal", units=60, activation="sigmoid")) 
+      
+    model.add(Dropout(0.5))
+    model.add(Dense(1))
+    model.add(Activation('sigmoid'))
+
+    print ('Compiling the Model...')
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',metrics=['accuracy'])
+
+    print ("Train...")
+    model.fit(x_train, y_train, batch_size=batch_size, epochs=n_epoch,verbose=1, validation_data=(x_test, y_test))
+
+    print ("Evaluate...")
+    score = model.evaluate(x_test, y_test,
+                                batch_size=batch_size)
+    yaml_string = model.to_yaml()
+    with open('lstm_data/lstm.yml', 'w') as outfile:
+        outfile.write( yaml.dump(yaml_string, default_flow_style=True) )
+    model.save_weights('lstm_data/lstm.h5')
+
+#     yaml_string = model.to_yaml()
+#     with open('lstm.yml', 'w') as outfile:
+#         outfile.write( yaml.dump(yaml_string, default_flow_style=True) )
+#     model.save_weights('lstm.h5')
+
+    print ('Test score:', score)
+
+
+#训练模型，并保存
+def train():
+    print ('Loading Data...')
+    combined,y=loadfile()
+    print (len(combined),len(y))
+    print ('Tokenising...')
+    combined = tokenizer(combined)
+    print ('Training a Word2vec model...')
+    index_dict, word_vectors,combined=word2vec_train(combined)
+    print ('Setting up Arrays for Keras Embedding Layer...')
+    n_symbols,embedding_weights,x_train,y_train,x_test,y_test=get_data(index_dict, word_vectors,combined,y)
+    print (x_train.shape,y_train.shape)
+    train_lstm(n_symbols,embedding_weights,x_train,y_train,x_test,y_test)
+
+
+# In[97]:
+
+
+
+train_lstm(n_symbols,embedding_weights,x_train,y_train,x_test,y_test)
+
+
+# In[104]:
+
+
+# from keras.layers.recurrent import GRU
+# def train_gru(n_symbols,embedding_weights,x_train,y_train,x_test,y_test):
+#     print ('Defining a Simple Keras Model...')
+#     model = Sequential()  # or Graph or whatever
+#     model.add(Embedding(output_dim=vocab_dim,
+#                         input_dim=n_symbols,
+#                         mask_zero=True,
+#                         weights=[embedding_weights],
+#                         input_length=input_length))  # Adding Input Length
+#     model.add(GRU(recurrent_activation="hard_sigmoid", kernel_initializer="glorot_uniform", recurrent_initializer="orthogonal", units=50, activation="sigmoid")) 
+      
+#     model.add(Dropout(0.5))
+#     model.add(Dense(1))
+#     model.add(Activation('sigmoid'))
+
+#     print ('Compiling the Model...')
+#     model.compile(loss='binary_crossentropy',
+#                   optimizer='adam',metrics=['accuracy'])
+
+#     print ("Train...")
+#     model.fit(x_train, y_train, batch_size=batch_size, epochs=n_epoch,verbose=1, validation_data=(x_test, y_test))
+
+#     print ("Evaluate...")
+#     score = model.evaluate(x_test, y_test,
+#                                 batch_size=batch_size)
+#     yaml_string = model.to_yaml()
+#     with open('gru_data/gru.yml', 'w') as outfile:
+#         outfile.write( yaml.dump(yaml_string, default_flow_style=True) )
+#     model.save_weights('gru_data/gru.h5')
+
+
+# In[2]:
+
+
+# train_gru(n_symbols,embedding_weights,x_train,y_train,x_test,y_test)
+import pandas as pd
+filename=pd.read_excel('/root/notebook/ZJ/Sentiments/舆情数据.xlsx')
+
+
+# In[5]:
+
+
+comment=filename['comment']
+
+
+# In[10]:
+
+
+comment[1].startswith("'") 
+
+
+# In[3]:
+
+
+filename.head(2)
+
+
+# In[109]:
+
+
+def comment_reader(filename):
+    
+
+
+# In[1]:
+
+
+
+
