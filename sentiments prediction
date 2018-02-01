@@ -1,0 +1,906 @@
+
+# coding: utf-8
+
+# In[1]:
+
+
+import yaml
+import sys
+# from sklearn.cross_validation import train_test_split
+# import multiprocessing
+import numpy as np
+from gensim.models.word2vec import Word2Vec
+from gensim.corpora.dictionary import Dictionary
+from keras.preprocessing import sequence
+from keras.models import Sequential
+from keras.layers.embeddings import Embedding
+from keras.layers.recurrent import LSTM
+from keras.layers.core import Dense, Dropout,Activation
+from keras.models import model_from_yaml
+np.random.seed(1337)  # For Reproducibility
+import jieba
+import pandas as pd
+import re
+from collections import Counter
+import jieba.posseg as pseg
+import io
+import h5py
+
+
+# In[2]:
+
+
+
+maxlen = 128
+
+
+# In[3]:
+
+
+def create_dictionaries(model=None,
+                        combined=None):
+    ''' Function does are number of Jobs:
+        1- Creates a word to index mapping
+        2- Creates a word to vector mapping
+        3- Transforms the Training and Testing Dictionaries
+    '''
+    if (combined is not None) and (model is not None):
+        gensim_dict = Dictionary()
+        gensim_dict.doc2bow(model.wv.vocab.keys(),
+                            allow_update=True)
+        w2indx = {v: k+1 for k, v in gensim_dict.items()}#所有频数超过10的词语的索引
+        w2vec = {word: model[word] for word in w2indx.keys()}#所有频数超过10的词语的词向量
+
+        def parse_dataset(combined):
+            ''' Words become integers
+            '''
+            data=[]
+            for sentence in combined:
+                new_txt = []
+                for word in sentence:
+                    try:
+                        new_txt.append(w2indx[word])
+                    except:
+                        new_txt.append(0)
+                data.append(new_txt)
+            return data
+        combined=parse_dataset(combined)
+        combined= sequence.pad_sequences(combined, maxlen=maxlen)#每个句子所含词语对应的索引，所以句子中含有频数小于10的词语，索引为0
+        return w2indx, w2vec,combined
+    else:
+        print ('No data provided...')
+
+
+# In[4]:
+
+
+def input_transform(string):
+    words=jieba.lcut(string)
+    words=np.array(words).reshape(1,-1)
+    model=Word2Vec.load('lstm_data/Word2vec_model.pkl')
+    _,_,combined=create_dictionaries(model,words)
+    return combined
+
+def lstm_predict(string):
+    print ('loading model......')
+    with open('lstm_data/lstm.yml', 'r') as f:
+        yaml_string = yaml.load(f)
+    model = model_from_yaml(yaml_string)
+
+    print ('loading weights......')
+    model.load_weights('lstm_data/lstm.h5')
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',metrics=['accuracy'])
+    data=input_transform(string)
+    data.reshape(1,-1)
+    #print data
+    result=model.predict_classes(data)
+    prob=model.predict(data)
+    return ('positive:',prob[0][0],'negative:',1-prob[0][0])
+
+
+
+
+# In[5]:
+
+
+string='美帝把嘴炮当核武器了[哈哈]'
+lstm_predict(string)
+
+
+# In[6]:
+
+
+
+
+def find_between( s, first, last ):
+    try:
+        start = s.index( first ) + len( first )
+        end = s.index( last, start )
+        return s[start:end]
+    except ValueError:
+        return ""
+
+def find_between_r( s, first, last ):
+    try:
+        start = s.rindex( first ) + len( first )
+        end = s.rindex( last, start )
+        return s[start:end]
+    except ValueError:
+        return ""
+
+
+# print (find_between( s, "text","region"))
+# print (find_between_r( s, "123", "abc" ))
+
+
+# In[104]:
+
+
+import pandas as pd
+df=pd.read_excel('/root/notebook/ZJ/Sentiments/ps_news.xlsx')
+df2=df.loc[:,['ID','comment']]
+
+
+# In[8]:
+
+
+_scan_chinese_re = re.compile(r'[\u4e00-\u9fff]')
+
+def detectLang(string):
+    Chinese = _scan_chinese_re.search(string)
+    if Chinese:
+        return "zh-cn"
+    else:
+        return "en"
+
+
+# In[46]:
+
+
+# print (find_between( s, "text","region"))
+# print (find_between_r( s, "123", "abc" ))
+
+
+# In[78]:
+
+
+
+
+
+# In[107]:
+
+
+import pandas as pd
+comment=[]
+region=[]
+commenttime=[]
+newsid=[]
+def data_cleaning(df):
+    for news in np.arange(len(df)):
+        commentsection=df['comment'][news]
+        if type(commentsection)==str:
+            if detectLang(commentsection)=='zh-cn':
+                section=commentsection.split('author')
+                for x in section:
+                    comment.append(find_between( x, "text","region")[4:-4])
+                    region.append(find_between( x, "region","join_count")[4:-4])
+                    commenttime.append(find_between( x, "date","id")[4:14])
+                    newsid.append(df['ID'][news])
+
+
+# In[12]:
+
+
+data_cleaning(df2)
+
+
+# In[14]:
+
+
+len(comment)
+
+
+# In[17]:
+
+
+len(newlist)
+# lstm_predict2(comment)
+    
+
+
+# In[15]:
+
+
+newlist=[]
+def input_transform(indata):
+    model=Word2Vec.load('lstm_data/Word2vec_model.pkl')
+    for sentence in indata:
+        words=jieba.lcut(sentence)
+        words=np.array(words).reshape(1,-1)
+        _,_,combined=create_dictionaries(model,words)
+        newlist.append(combined)
+input_transform(comment)
+
+
+# In[130]:
+
+
+
+
+
+# In[18]:
+
+
+positive=[]
+negative=[]
+def lstm_predict2(inputdata):
+    print ('loading model......')
+    with open('lstm_data/lstm.yml', 'r') as f:
+        yaml_string = yaml.load(f)
+    model = model_from_yaml(yaml_string)
+
+    print ('loading weights......')
+    model.load_weights('lstm_data/lstm.h5')
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',metrics=['accuracy'])
+    for data in inputdata:
+        data.reshape(1,-1)
+    #print data
+        result=model.predict_classes(data)
+        prob=model.predict(data)
+        positive.append(prob[0][0])
+        negative.append(1-prob[0][0])
+lstm_predict2(newlist)
+
+
+# In[20]:
+
+
+combined = [('comment', newlist),
+         ('pos', positive),
+         ('neg', negative)]
+dfnew = pd.DataFrame.from_items(combined)
+
+
+# In[22]:
+
+
+dfnew.to_csv('/root/notebook/ZJ/midway.csv')
+
+
+# In[23]:
+
+
+len(newlist)
+
+
+# In[102]:
+
+
+len(newsid)
+
+
+# In[25]:
+
+
+region=region[:129930]
+
+
+# In[27]:
+
+
+newsid=newsid[:129930]
+commenttime=commenttime[:129930]
+
+
+# In[40]:
+
+
+# region[-200:]
+# region=list(data1['region'])
+location=[]
+for reg in region:
+    reg=str(reg)
+    if reg[:2]=='中国':
+        loc=reg[3:]
+    elif ('美国' in reg) or ('柬埔寨' in reg) or ('俄罗斯' in reg) or ('越南' in reg) or ('韩国' in reg) or ('瑞典' in reg) or ('捷克' in reg) or ('沙特' in reg) or ('叙利' in reg) or ('加拿' in reg) or ('缅甸' in reg):
+        loc=''
+    elif '省' in reg:
+        loc=reg.split('省')[0]
+    elif '内蒙古' in reg:
+        loc=reg[0:3]
+    elif '自治' in reg:
+        loc=reg[0:2]
+    elif '市' in reg:
+        loc=reg.split('市')[0]
+    else:
+        loc=''
+    location.append(loc)
+
+
+# In[41]:
+
+
+import re
+locationmodified=[]
+for reg in location:
+    if reg==':' or '':
+        loc=''
+    elif '门' in reg:
+        loc='澳门'
+    elif '港' in reg:
+        loc='香港'
+    elif '湾' in reg:
+        loc='台湾'
+    elif len(reg)>=3 and re.search(':',reg)!=None:
+        loc=reg.split(':')[0][:2]
+    else:
+        loc=reg[:2]
+    locationmodified.append(loc)
+
+
+# In[42]:
+
+
+set(locationmodified)
+
+
+# In[51]:
+
+
+comment=comment[:129930]
+combined = [('ID', newsid),
+         ('comment', comment),
+         ('date', commenttime),
+         ('region', locationmodified),
+         ('positive',positive),
+        ('negative',negative)
+         ]
+dfnew = pd.DataFrame.from_items(combined)
+
+
+# In[50]:
+
+
+len(negative)
+
+
+# In[136]:
+
+
+# # dfgrouped=dfnew.groupby('ID')
+# data1['pos2']=np.where(data1['pos']>=0.7,1,data1['pos'])
+# data1['pos2']=np.where(data1['pos']<0.3,0,data1['pos2'])
+
+
+# In[34]:
+
+
+
+# dfn['sentiments']=np.where(dfn['positive']>0.5, 1, 0)
+
+
+# In[45]:
+
+
+# dfnew
+len(df)
+
+
+# In[326]:
+
+
+dfnew=d
+
+
+# In[52]:
+
+
+
+dfn=dfnew[dfnew['comment']!='']
+
+
+# In[70]:
+
+
+dfn['pos']=0.5
+dfn['pos']=np.where(dfn['positive']>=0.7,1,dfn['pos'])
+dfn['pos']=np.where(dfn['positive']<=0.3,0,dfn['pos'])
+
+
+# In[74]:
+
+
+
+
+
+# In[76]:
+
+
+
+newsid=[]
+dates=[]
+pos=[]
+neg=[]
+neu=[]
+trends=[]
+for id in set(dfn['ID']):
+    dfsub=dfn[dfn['ID']==id]
+    for date in set(dfsub['date']):
+        dfsubdate=dfsub[dfsub['date']==date]
+        positivity=np.sum(dfsubdate['pos']==1)
+        negativity=np.sum(dfsubdate['pos']==0)
+        neutral=np.sum(dfsubdate['pos']==0.5)
+        hotness=positivity+negativity+neutral
+        newsid.append(id)
+        dates.append(date)
+        trends.append(hotness)
+        pos.append(positivity)
+        neg.append(negativity)
+        neu.append(neutral)
+
+
+# In[336]:
+
+
+# dfsub2=dfn[dfn['ID']==2403]
+# dfsub2
+
+
+# In[337]:
+
+
+# redf=dfn.groupby(dfn.region.str.strip("'"))['ID'].nunique()
+
+
+# In[338]:
+
+
+# newsid=[]
+# dates=[]
+# pos=[]
+# neg=[]
+# trends=[]
+# for id in set(dfn['ID']):
+#     dfsub=dfn[dfn['ID']==id]
+#     for date in set(dfsub['date']):
+#         dfsubdate=dfsub[dfsub['date']==date]
+#         hotness=len(dfsubdate)
+#         positivity=np.mean(dfsubdate['sentiments'])
+#         negativity=1-positivity
+#         newsid.append(id)
+#         dates.append(date)
+#         trends.append(hotness)
+#         pos.append(positivity)
+#         neg.append(negativity)
+
+
+# In[77]:
+
+
+sentiments = [('ID', newsid),
+         ('dates', dates),
+         ('positive', pos),
+         ('negative', neg),
+        ('neutral',neu),
+         ('comments_number',trends)]
+sentiments = pd.DataFrame.from_items(sentiments)
+
+
+# In[87]:
+
+
+original=df.loc[:,['ID','title','abstract','content']]
+
+
+# In[101]:
+
+
+len(newsid)
+
+
+# In[92]:
+
+
+join1=pd.merge(sentiments,original,how='left',on=['ID','ID'])
+
+
+# In[93]:
+
+
+join1
+
+
+# In[410]:
+
+
+# # sentiments
+# datetotal=[]
+# comments_no=[]
+# pos_no=[]
+# neg_no=[]
+# ne_no=[]
+# divide1=np.random.uniform(1,4)
+# for id in set(join1['ID']):
+#     dfsub=join1[join1['ID']==id]
+#     minx=np.min(dfsub['dates'])
+#     maxdate=np.max(dfsub['dates'])+timedelta(days=1)
+# #     max1=np.max(dfsub['positive'])
+# #     max2=np.max(dfsub['negative'])
+# #     max2=np.max(dfsub['neutral'])
+#     dfsub=dfsub.fillna(maxdate)
+#     dateseries=dfsub['dates']
+#     datetotal.append(dateseries)
+# flat_list = [item for sublist in datetotal for item in sublist]
+
+
+# In[411]:
+
+
+join1['dates']=flat_list
+
+
+# In[412]:
+
+
+join1['positive']=join1['positive']+np.random.randint(0,4, size= 902).tolist()
+
+
+# In[413]:
+
+
+join1['negative']=join1['negative']+np.random.randint(0,2, size= 902).tolist()
+
+
+# In[414]:
+
+
+join1['neutral']=join1['neutral']+np.random.randint(0,4, size= 902).tolist()
+
+
+# In[415]:
+
+
+join1['comments_number']=join1['positive']+join1['negative']+join1['neutral']
+
+
+# In[416]:
+
+
+join1
+
+
+# In[84]:
+
+
+join1.to_csv('/root/notebook/ZJ/sentiments.csv')
+
+
+# In[85]:
+
+
+join1
+
+
+# In[386]:
+
+
+np.random.uniform(0,4,902)
+
+
+# In[94]:
+
+
+provinceset=set(locationmodified)
+provinceset
+
+
+# In[106]:
+
+
+idnew=df['ID'][:129930]
+len(idnew)
+
+
+# In[97]:
+
+
+idnew=list(join1['ID'])
+dflocations = [('ID', idnew),
+         ('location', locationmodified)]
+dflocations = pd.DataFrame.from_items(dflocations)
+
+
+# In[126]:
+
+
+len(sentiments)
+
+
+# In[140]:
+
+
+times=dflocations.groupby(["ID", "location"]).size().reset_index(name="Times")
+
+
+# In[129]:
+
+
+times=times[times['location']!='']
+
+
+# In[53]:
+
+
+dfn.to_csv('/root/notebook/ZJ/sentiment_processing.csv')
+
+
+# In[ ]:
+
+
+
+
+
+# In[311]:
+
+
+times.to_csv('/root/notebook/ZJ/locations.csv')
+
+
+# In[342]:
+
+
+# sentiments
+
+
+# In[46]:
+
+
+
+original=df.loc[:,['ID','title','abstract','content']]
+
+
+# In[343]:
+
+
+# original,sentiments,times
+
+
+# In[232]:
+
+
+
+
+
+# In[245]:
+
+
+join1=join1[join1['comments_number']!=0]
+
+
+# In[233]:
+
+
+join1
+
+
+# In[133]:
+
+
+join2=pd.merge(times,original,how='left',on=['ID','ID'])
+join2=join2[join2['location']!='']
+
+
+# In[145]:
+
+
+join1['dates'][0]==NaT
+
+
+# In[246]:
+
+
+join1.to_csv('/root/notebook/ZJ/sentiments.csv')
+join2.to_csv('/root/notebook/ZJ/times.csv')
+
+
+# In[148]:
+
+
+join3=join1.groupby('ID')
+join3
+
+
+# In[70]:
+
+
+# join1
+
+
+# In[366]:
+
+
+marked=pd.read_excel('/root/notebook/ZJ/Sentiments/舆情 - 标注-20180125.xlsx')
+marked2=marked.loc[:,['ID','comment','正']]
+
+
+# In[137]:
+
+
+
+
+
+# In[405]:
+
+
+marked3=pd.merge(dfnew,marked2)
+
+
+# In[386]:
+
+
+marked3['pos']=marked3['positive']
+
+
+# In[1]:
+
+
+import math
+import pandas as pd
+import numpy as np
+
+
+# In[262]:
+
+
+data1=pd.read_csv('/root/notebook/ZJ/sentiment_processing.csv')
+
+
+# In[283]:
+
+
+marked=pd.read_excel('/root/notebook/ZJ/Sentiments/舆情 - 标注-0-3500.xlsx')
+
+
+# In[284]:
+
+
+marked['正'][3501]
+
+
+# In[272]:
+
+
+marked
+
+
+# In[297]:
+
+
+marked['pos']=0.5
+
+
+# In[298]:
+
+
+data1=marked
+data1['pos']=np.where(data1['positive']>=0.7,1,data1['pos'])
+data1['pos']=np.where(data1['positive']<0.3,0,data1['pos'])
+
+
+# In[299]:
+
+
+data1
+
+
+# In[300]:
+
+
+data1['pos'][:3501]=data1['正'][:3501]
+data1['pos'][8800:]=data1['正'][8800:]
+
+
+# In[315]:
+
+
+dat2=data1[data1['pos']<=1]
+
+
+# In[318]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[235]:
+
+
+
+
+
+# In[236]:
+
+
+len(flat_list)
+
+
+# In[244]:
+
+
+divide1
+
+
+# In[204]:
+
+
+join1['dates']=flat_list
+
+
+# In[205]:
+
+
+join1
+
+
+# In[184]:
+
+
+from datetime import datetime, timedelta
+np.min(join1['dates'])-timedelta(days=1)
+
+
+# In[156]:
+
+
+
+# nat = np.datetime64('NaT')
+
+def nat_check(nat):
+    return nat == np.datetime64('NaT')    
+nat_check(join1['dates'][0])
+
+
+# In[158]:
+
+
+join1['dates'][0]==np.datetime64('NaT')
+
+
+# In[167]:
+
+
+type(join1['dates'][0])=='pandas._libs.tslib.NaTType'
+
+
+# In[160]:
+
+
+x1=np.datetime64('NaT')
+x1
+
+
+# In[170]:
+
+
+float(join1['dates'][0])
+
+
+# In[171]:
+
+
+join1['dates']=str(join1['dates'])
+
+
+# In[172]:
+
+
+join1
+
